@@ -1,4 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI,Query
+from source.services.products_s import filter_and_sort_products()
+from  typing import Optional
 
 app = FastAPI(
     title="Sales API",
@@ -16,19 +18,40 @@ def health_check():
 # PRODUCTS
 # -------------------------
 
+PRODUCTS = [
+    {"id": 1, "name": "Laptop", "price": 1200, "category": "electronics"},
+    {"id": 2, "name": "Mouse", "price": 25, "category": "electronics"},
+    {"id": 3, "name": "Chair", "price": 80, "category": "furniture"},
+]
+
 @app.get("/products")
-def list_products():
+def get_products(
+    min_price: Optional[float] = Query(None),
+    max_price: Optional[float] = Query(None),
+    category: Optional[str] = Query(None),
+    sort_by: Optional[Literal["price", "name"]] = Query(None),
+    sort_order: Literal["asc", "desc"] = Query("asc"),
+):
+    products = filter_and_sort_products(
+        min_price=min_price,
+        max_price=max_price,
+        category=category,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+
     return {
-        "data": [],
+        "data": products,
         "meta": {
-            "pagination": {
-                "page": 1,
-                "limit": 20,
-                "total": 0
+            "filters": {
+                "min_price": min_price,
+                "max_price": max_price,
+                "category": category,
+                "sort_by": sort_by,
+                "sort_order": sort_order,
             }
         }
     }
-
 
 @app.get("/products/{product_id}")
 def get_product(product_id: int):
