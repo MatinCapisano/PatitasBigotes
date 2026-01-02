@@ -1,6 +1,6 @@
 from fastapi import FastAPI,Query
-from source.services.products_s import filter_and_sort_products()
-from  typing import Optional
+from source.services.products_s import filter_and_sort_products
+from  typing import Optional,Literal
 
 app = FastAPI(
     title="Sales API",
