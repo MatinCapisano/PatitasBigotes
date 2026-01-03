@@ -34,3 +34,11 @@ def filter_and_sort_products(
         result = sorted(result, key=lambda p: p[sort_by], reverse=reverse)
 
     return result
+
+
+
+def get_product_by_id(product_id: int) -> Optional[dict]:
+    for product in PRODUCTS:
+        if product["id"] == product_id:
+            return product
+    return None
