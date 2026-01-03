@@ -1,5 +1,5 @@
-from fastapi import FastAPI,Query
-from source.services.products_s import filter_and_sort_products
+from fastapi import FastAPI,Query,HTTPException
+from source.services.products_s import *
 from  typing import Optional,Literal
 
 app = FastAPI(
@@ -55,12 +55,16 @@ def get_products(
 
 @app.get("/products/{product_id}")
 def get_product(product_id: int):
+    product = get_product_by_id(product_id)
+
+    if product is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found"
+        )
+
     return {
-        "data": {
-            "id": product_id,
-            "name": "placeholder product",
-            "price": 0
-        }
+        "data": product
     }
 
 
