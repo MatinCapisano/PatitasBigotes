@@ -93,10 +93,43 @@ class Order(Base):
         nullable=False,
     )
 
-    status = Column(String, nullable=False, default="created")
-    total_amount = Column(Float, nullable=False)
+    status = Column(String, nullable=False, default="draft")
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    total_amount = Column(Float, nullable=False, default=0)
 
-    # Relación
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    # Relaciones
     user = relationship("User", back_populates="orders")
+    items = relationship("OrderItem", back_populates="order")
+
+
+
+class OrderItem(Base):
+    __tablename__ = "order_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    order_id = Column(
+        Integer,
+        ForeignKey("orders.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    product_id = Column(
+        Integer,
+        ForeignKey("products.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+
+    quantity = Column(Integer, nullable=False)
+
+    unit_price = Column(Float, nullable=False)
+
+    order = relationship("Order", back_populates="items")
+    product = relationship("Product")
