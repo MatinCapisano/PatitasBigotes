@@ -1,12 +1,53 @@
-from fastapi import FastAPI,Query,HTTPException
-from source.services.products_s import *
-from  typing import Optional,Literal
+from typing import Literal, Optional
+
+from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from auth.security import decode_access_token
+from source.services.products_s import filter_and_sort_products, get_product_by_id
 
 app = FastAPI(
     title="Sales API",
     version="0.1.0",
     description="API para página de ventas. Etapa inicial."
 )
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> dict:
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing bearer token",
+        )
+
+    try:
+        payload = decode_access_token(credentials.credentials)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        ) from exc
+
+    if not payload.get("sub"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token payload is missing subject",
+        )
+
+    return payload
+
+
+def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    if not current_user.get("is_admin", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin permissions required",
+        )
+
+    return current_user
 
 
 @app.get("/health")
@@ -69,7 +110,7 @@ def get_product(product_id: int):
 
 
 @app.post("/products")
-def create_product():
+def create_product(_: dict = Depends(require_admin)):
     return {
         "data": {
             "id": 1,
@@ -79,7 +120,7 @@ def create_product():
 
 
 @app.put("/products/{product_id}")
-def update_product(product_id: int):
+def update_product(product_id: int, _: dict = Depends(require_admin)):
     return {
         "data": {
             "id": product_id,
@@ -89,7 +130,7 @@ def update_product(product_id: int):
 
 
 @app.delete("/products/{product_id}")
-def delete_product(product_id: int):
+def delete_product(product_id: int, _: dict = Depends(require_admin)):
     return {
         "data": {
             "id": product_id,
@@ -117,7 +158,7 @@ def create_user():
 # -------------------------
 
 @app.post("/orders")
-def create_order():
+def create_order(_: dict = Depends(get_current_user)):
     return {
         "data": {
             "id": 1,
@@ -131,7 +172,7 @@ def create_order():
 # -------------------------
 
 @app.post("/turns")
-def create_turn():
+def create_turn(_: dict = Depends(get_current_user)):
     return {
         "data": {
             "id": 1,
