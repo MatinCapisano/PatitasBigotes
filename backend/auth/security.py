@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta
 from typing import Optional
 
-from jose import jwt, JWTError
+from jose import ExpiredSignatureError, JWTError, jwt
+from passlib.exc import InvalidHashError, UnknownHashError
 from passlib.context import CryptContext
 
 
@@ -28,7 +29,10 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     """
     Verifica una contraseña contra su hash.
     """
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except (UnknownHashError, InvalidHashError, ValueError, TypeError):
+        return False
 
 
 
@@ -43,7 +47,7 @@ def create_access_token(
 
     expire = datetime.utcnow() + (
         expires_delta
-        if expires_delta
+        if expires_delta is not None
         else timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
 
@@ -71,5 +75,7 @@ def decode_access_token(token: str) -> dict:
             algorithms=[ALGORITHM]
         )
         return payload
-    except JWTError:
-        raise ValueError("Invalid token")
+    except ExpiredSignatureError as exc:
+        raise ValueError("Token expired") from exc
+    except JWTError as exc:
+        raise ValueError("Invalid token") from exc
