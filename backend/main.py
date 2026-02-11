@@ -2,8 +2,16 @@ from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, Field
 
 from auth.security import decode_access_token
+from source.services.orders_s import (
+    add_item_to_draft_order,
+    change_order_status,
+    get_or_create_draft_order,
+    get_order_for_user,
+    remove_item_from_draft_order,
+)
 from source.services.products_s import filter_and_sort_products, get_product_by_id
 
 app = FastAPI(
@@ -48,6 +56,15 @@ def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
         )
 
     return current_user
+
+
+class AddOrderItemRequest(BaseModel):
+    product_id: int
+    quantity: int = Field(gt=0)
+
+
+class UpdateOrderStatusRequest(BaseModel):
+    status: Literal["draft", "submitted", "paid", "cancelled"]
 
 
 @app.get("/health")
@@ -157,14 +174,89 @@ def create_user():
 # ORDERS
 # -------------------------
 
-@app.post("/orders")
-def create_order(_: dict = Depends(get_current_user)):
+@app.get("/orders/draft")
+def get_or_create_draft(current_user: dict = Depends(get_current_user)):
+    user_ref = str(current_user["sub"])
+    order, created = get_or_create_draft_order(user_ref)
     return {
-        "data": {
-            "id": 1,
-            "status": "created"
-        }
+        "data": order,
+        "meta": {
+            "created": created,
+        },
     }
+
+
+@app.post("/orders/draft/items")
+def add_item_to_draft(
+    payload: AddOrderItemRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    user_ref = str(current_user["sub"])
+    product = get_product_by_id(payload.product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    try:
+        order = add_item_to_draft_order(
+            user_ref=user_ref,
+            product=product,
+            quantity=payload.quantity,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"data": order}
+
+
+@app.delete("/orders/draft/items/{item_id}")
+def remove_item_from_draft(
+    item_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    user_ref = str(current_user["sub"])
+    try:
+        order = remove_item_from_draft_order(user_ref=user_ref, item_id=item_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if order is None:
+        raise HTTPException(status_code=404, detail="Draft order item not found")
+
+    return {"data": order}
+
+
+@app.patch("/orders/{order_id}/status")
+def update_order_status(
+    order_id: int,
+    payload: UpdateOrderStatusRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    user_ref = str(current_user["sub"])
+
+    try:
+        order = change_order_status(
+            user_ref=user_ref,
+            order_id=order_id,
+            new_status=payload.status,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"data": order}
+
+
+@app.get("/orders/{order_id}")
+def get_order(
+    order_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    user_ref = str(current_user["sub"])
+    order = get_order_for_user(user_ref=user_ref, order_id=order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return {"data": order}
 
 
 # -------------------------
