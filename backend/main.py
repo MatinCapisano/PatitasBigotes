@@ -2,7 +2,7 @@ from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from auth.security import decode_access_token
 from source.services.orders_s import (
@@ -65,6 +65,14 @@ class AddOrderItemRequest(BaseModel):
 
 class UpdateOrderStatusRequest(BaseModel):
     status: Literal["draft", "submitted", "paid", "cancelled"]
+
+
+class CreateUserRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    first_name: str
+    last_name: str
+    email: EmailStr
+    password: str
 
 
 @app.get("/health")
@@ -146,6 +154,16 @@ def update_product(product_id: int, _: dict = Depends(require_admin)):
     }
 
 
+@app.patch("/products/{product_id}")
+def patch_product(product_id: int, _: dict = Depends(require_admin)):
+    return {
+        "data": {
+            "id": product_id,
+            "status": "patched"
+        }
+    }
+
+
 @app.delete("/products/{product_id}")
 def delete_product(product_id: int, _: dict = Depends(require_admin)):
     return {
@@ -161,11 +179,17 @@ def delete_product(product_id: int, _: dict = Depends(require_admin)):
 # -------------------------
 
 @app.post("/users")
-def create_user():
+def create_user(payload: CreateUserRequest):
+    user_data = payload.model_dump()
     return {
         "data": {
             "id": 1,
-            "status": "created"
+            "first_name": user_data["first_name"],
+            "last_name": user_data["last_name"],
+            "email": user_data["email"],
+            "is_admin": False,
+            "is_active": True,
+            "status": "created",
         }
     }
 
@@ -232,6 +256,14 @@ def update_order_status(
     current_user: dict = Depends(get_current_user),
 ):
     user_ref = str(current_user["sub"])
+    current_order = get_order_for_user(user_ref=user_ref, order_id=order_id)
+    if current_order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if current_order["status"] != "draft":
+        raise HTTPException(
+            status_code=400,
+            detail="Order can only be modified in draft status",
+        )
 
     try:
         order = change_order_status(
@@ -264,7 +296,7 @@ def get_order(
 # -------------------------
 
 @app.post("/turns")
-def create_turn(_: dict = Depends(get_current_user)):
+def create_turn(_: dict = Depends(require_admin)):
     return {
         "data": {
             "id": 1,
