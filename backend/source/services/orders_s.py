@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from source.services.discount_s import (
+    freeze_order_pricing,
+    reprice_order_items,
+    validate_order_pricing_before_submit,
+)
 from source.services.products_s import get_product_by_id, decrement_stock
 
 ALLOWED_ORDER_STATUS = {"draft", "submitted", "paid", "cancelled"}
 
 _orders: list[dict] = []
+_discounts: list[dict] = []
 _next_order_id = 1
 _next_item_id = 1
 
@@ -16,9 +22,16 @@ def _utc_now_iso() -> str:
 
 
 def _recalculate_order_total(order: dict) -> None:
-    order["total_amount"] = sum(
-        item["quantity"] * item["unit_price"]
-        for item in order["items"]
+    products_by_id: dict[int, dict] = {}
+    for item in order["items"]:
+        product = get_product_by_id(item["product_id"])
+        if product is not None:
+            products_by_id[item["product_id"]] = product
+
+    reprice_order_items(
+        order=order,
+        discounts=_discounts,
+        products_by_id=products_by_id,
     )
     order["updated_at"] = _utc_now_iso()
 
@@ -31,7 +44,11 @@ def _build_order(user_ref: str) -> dict:
         "user_ref": user_ref,
         "status": "draft",
         "items": [],
+        "subtotal": 0.0,
+        "discount_total": 0.0,
         "total_amount": 0.0,
+        "pricing_frozen": False,
+        "pricing_frozen_at": None,
         "created_at": now,
         "updated_at": now,
     }
@@ -135,24 +152,44 @@ def change_order_status(
     if order["status"] != "draft" and new_status == "draft":
         raise ValueError("cannot move non-draft order back to draft")
 
+    if order["status"] == "draft" and new_status == "submitted":
+        _recalculate_order_total(order)
+        validate_order_pricing_before_submit(order)
+        freeze_order_pricing(order)
+
     order["status"] = new_status
     order["updated_at"] = _utc_now_iso()
     return order
 
 
-def pay_order(user_ref: str, order_id: int, payment_ref: str) -> dict:
+def pay_order(
+    user_ref: str,
+    order_id: int,
+    payment_ref: str,
+    paid_amount: float,
+) -> dict:
     if not payment_ref or not payment_ref.strip():
         raise ValueError("payment_ref is required")
+    if paid_amount <= 0:
+        raise ValueError("paid_amount must be greater than 0")
 
     order = get_order_for_user(user_ref=user_ref, order_id=order_id)
     if order is None:
         raise LookupError("order not found")
+
+    if order["status"] != "submitted" and order["status"] != "paid":
+        raise ValueError("order can only be paid from submitted status")
 
     if not order["items"]:
         raise ValueError("cannot pay an empty order")
 
     if order["status"] == "cancelled":
         raise ValueError("cannot pay a cancelled order")
+
+    expected_total = round(float(order.get("total_amount", 0.0)), 2)
+    received_total = round(float(paid_amount), 2)
+    if expected_total != received_total:
+        raise ValueError("paid_amount does not match order total")
 
     existing_ref = order.get("payment_ref")
     if order["status"] == "paid":
@@ -179,6 +216,7 @@ def pay_order(user_ref: str, order_id: int, payment_ref: str) -> dict:
     now = _utc_now_iso()
     order["status"] = "paid"
     order["payment_ref"] = payment_ref
+    order["paid_amount"] = received_total
     order["paid_at"] = now
     order["updated_at"] = now
     return order
