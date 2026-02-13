@@ -4,6 +4,7 @@ from datetime import datetime
 
 from source.services.discount_s import (
     freeze_order_pricing,
+    list_discounts,
     reprice_order_items,
     validate_order_pricing_before_submit,
 )
@@ -12,7 +13,6 @@ from source.services.products_s import get_product_by_id, decrement_stock
 ALLOWED_ORDER_STATUS = {"draft", "submitted", "paid", "cancelled"}
 
 _orders: list[dict] = []
-_discounts: list[dict] = []
 _next_order_id = 1
 _next_item_id = 1
 
@@ -30,7 +30,7 @@ def _recalculate_order_total(order: dict) -> None:
 
     reprice_order_items(
         order=order,
-        discounts=_discounts,
+        discounts=list_discounts(),
         products_by_id=products_by_id,
     )
     order["updated_at"] = _utc_now_iso()

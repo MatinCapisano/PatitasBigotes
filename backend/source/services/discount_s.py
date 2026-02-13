@@ -3,6 +3,107 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Iterable
 
+ALLOWED_DISCOUNT_TYPES = {"percent", "fixed"}
+ALLOWED_DISCOUNT_SCOPES = {"all", "category", "product", "product_list"}
+
+_discounts: list[dict] = []
+_next_discount_id = 1
+
+
+def list_discounts() -> list[dict]:
+    return _discounts
+
+
+def get_discount_by_id(discount_id: int) -> dict | None:
+    for discount in _discounts:
+        if discount["id"] == discount_id:
+            return discount
+    return None
+
+
+def create_discount(payload: dict) -> dict:
+    global _next_discount_id
+    _validate_discount_payload(payload)
+
+    discount = {
+        "id": _next_discount_id,
+        "name": payload["name"],
+        "type": payload["type"],
+        "value": float(payload["value"]),
+        "scope": payload["scope"],
+        "scope_value": payload.get("scope_value"),
+        "is_active": bool(payload.get("is_active", True)),
+        "starts_at": payload.get("starts_at"),
+        "ends_at": payload.get("ends_at"),
+        "product_ids": list(dict.fromkeys(payload.get("product_ids", []))),
+    }
+    _next_discount_id += 1
+    _discounts.append(discount)
+    return discount
+
+
+def update_discount(discount_id: int, updates: dict) -> dict | None:
+    discount = get_discount_by_id(discount_id)
+    if discount is None:
+        return None
+
+    merged = {**discount, **updates}
+    _validate_discount_payload(merged)
+
+    for field in (
+        "name",
+        "type",
+        "value",
+        "scope",
+        "scope_value",
+        "is_active",
+        "starts_at",
+        "ends_at",
+    ):
+        if field in updates:
+            discount[field] = merged[field]
+
+    if "product_ids" in updates:
+        set_discount_product_list(discount, updates["product_ids"])
+
+    return discount
+
+
+def delete_discount(discount_id: int) -> dict | None:
+    for idx, discount in enumerate(_discounts):
+        if discount["id"] == discount_id:
+            removed = _discounts[idx]
+            del _discounts[idx]
+            return removed
+    return None
+
+
+def _validate_discount_payload(payload: dict) -> None:
+    discount_type = payload.get("type")
+    scope = payload.get("scope")
+    value = payload.get("value")
+    scope_value = payload.get("scope_value")
+    product_ids = payload.get("product_ids", [])
+
+    if discount_type not in ALLOWED_DISCOUNT_TYPES:
+        raise ValueError("invalid discount type")
+    if scope not in ALLOWED_DISCOUNT_SCOPES:
+        raise ValueError("invalid discount scope")
+    if value is None or float(value) <= 0:
+        raise ValueError("discount value must be greater than 0")
+    if discount_type == "percent" and float(value) > 100:
+        raise ValueError("percent discount cannot exceed 100")
+
+    if scope == "all" and scope_value is not None:
+        raise ValueError("scope_value must be null for all scope")
+    if scope in {"category", "product"} and scope_value is None:
+        raise ValueError("scope_value is required for category/product scope")
+    if scope == "product_list":
+        if scope_value is not None:
+            raise ValueError("scope_value must be null for product_list scope")
+        if not product_ids:
+            raise ValueError("product_ids is required for product_list scope")
+
 
 # Core (pure logic)
 def is_discount_currently_valid(discount: dict, at: datetime | None = None) -> bool:
