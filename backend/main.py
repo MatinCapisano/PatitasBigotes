@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
@@ -5,11 +6,17 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from auth.security import decode_access_token
+from source.services.discount_s import (
+    delete_discount,
+    list_discounts,
+    update_discount,
+)
 from source.services.orders_s import (
     add_item_to_draft_order,
     change_order_status,
     get_or_create_draft_order,
     get_order_for_user,
+    pay_order,
     remove_item_from_draft_order,
 )
 from source.services.products_s import filter_and_sort_products, get_product_by_id
@@ -73,6 +80,25 @@ class CreateUserRequest(BaseModel):
     last_name: str
     email: EmailStr
     password: str
+
+
+class UpdateDiscountRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = None
+    type: Literal["percent", "fixed"] | None = None
+    value: float | None = Field(default=None, gt=0)
+    scope: Literal["all", "category", "product", "product_list"] | None = None
+    scope_value: str | None = None
+    is_active: bool | None = None
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    product_ids: list[int] | None = None
+
+
+class PayOrderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    payment_ref: str
+    paid_amount: float = Field(gt=0)
 
 
 @app.get("/health")
@@ -289,6 +315,67 @@ def get_order(
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found")
     return {"data": order}
+
+
+@app.post("/orders/{order_id}/pay")
+def pay_order_endpoint(
+    order_id: int,
+    payload: PayOrderRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    payment_ref = payload.payment_ref.strip()
+    if not payment_ref:
+        raise HTTPException(status_code=400, detail="payment_ref is required")
+
+    user_ref = str(current_user["sub"])
+    try:
+        order = pay_order(
+            user_ref=user_ref,
+            order_id=order_id,
+            payment_ref=payment_ref,
+            paid_amount=payload.paid_amount,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"data": order}
+
+
+# -------------------------
+# DISCOUNTS
+# -------------------------
+
+@app.get("/discounts")
+def get_discounts(_: dict = Depends(require_admin)):
+    return {"data": list_discounts()}
+
+
+@app.patch("/discounts/{discount_id}")
+def patch_discount(
+    discount_id: int,
+    payload: UpdateDiscountRequest,
+    _: dict = Depends(require_admin),
+):
+    updates = payload.model_dump(exclude_none=True)
+    try:
+        discount = update_discount(discount_id=discount_id, updates=updates)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if discount is None:
+        raise HTTPException(status_code=404, detail="discount not found")
+
+    return {"data": discount}
+
+
+@app.delete("/discounts/{discount_id}")
+def remove_discount(discount_id: int, _: dict = Depends(require_admin)):
+    discount = delete_discount(discount_id=discount_id)
+    if discount is None:
+        raise HTTPException(status_code=404, detail="discount not found")
+    return {"data": discount}
 
 
 # -------------------------
