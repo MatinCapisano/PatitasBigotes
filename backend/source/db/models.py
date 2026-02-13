@@ -1,14 +1,16 @@
+from datetime import datetime
+
 from sqlalchemy import (
+    Boolean,
     Column,
-    Integer,
-    String,
+    DateTime,
     Float,
     ForeignKey,
-    DateTime,
-    Boolean,
+    Integer,
+    String,
 )
 from sqlalchemy.orm import declarative_base, relationship
-from datetime import datetime
+
 Base = declarative_base()
 
 
@@ -18,7 +20,6 @@ class Category(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False, unique=True)
 
-    # Relación inversa (opcional pero recomendable)
     products = relationship("Product", back_populates="category")
 
 
@@ -31,15 +32,15 @@ class Product(Base):
     description = Column(String, nullable=True)
     price = Column(Float, nullable=False)
 
-    # Clave foránea
     category_id = Column(
         Integer,
         ForeignKey("categories.id", ondelete="RESTRICT"),
         nullable=False,
     )
 
-    # Relación ORM
     category = relationship("Category", back_populates="products")
+    discount_links = relationship("DiscountProduct", back_populates="product")
+
 
 class User(Base):
     __tablename__ = "users"
@@ -57,7 +58,6 @@ class User(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-    # Relaciones
     orders = relationship("Order", back_populates="user")
     turns = relationship("Turn", back_populates="user")
 
@@ -74,7 +74,6 @@ class Order(Base):
     )
 
     status = Column(String, nullable=False, default="draft")
-
     total_amount = Column(Float, nullable=False, default=0)
 
     updated_at = Column(
@@ -84,10 +83,8 @@ class Order(Base):
         nullable=False,
     )
 
-    # Relaciones
     user = relationship("User", back_populates="orders")
     items = relationship("OrderItem", back_populates="order")
-
 
 
 class OrderItem(Base):
@@ -108,8 +105,52 @@ class OrderItem(Base):
     )
 
     quantity = Column(Integer, nullable=False)
-
     unit_price = Column(Float, nullable=False)
 
     order = relationship("Order", back_populates="items")
     product = relationship("Product")
+
+
+class Discount(Base):
+    __tablename__ = "discounts"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    name = Column(String, nullable=False)
+    type = Column(String, nullable=False)  # percent | fixed
+    value = Column(Float, nullable=False)
+
+    scope = Column(String, nullable=False)  # all | category | product | product_list
+    scope_value = Column(String, nullable=True)
+
+    is_active = Column(Boolean, default=True, nullable=False)
+    starts_at = Column(DateTime, nullable=True)
+    ends_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    product_links = relationship("DiscountProduct", back_populates="discount")
+
+
+class DiscountProduct(Base):
+    __tablename__ = "discount_products"
+
+    discount_id = Column(
+        Integer,
+        ForeignKey("discounts.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    product_id = Column(
+        Integer,
+        ForeignKey("products.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    discount = relationship("Discount", back_populates="product_links")
+    product = relationship("Product", back_populates="discount_links")
