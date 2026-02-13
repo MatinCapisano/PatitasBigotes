@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from source.services.products_s import get_product_by_id, decrement_stock
+
 ALLOWED_ORDER_STATUS = {"draft", "submitted", "paid", "cancelled"}
 
 _orders: list[dict] = []
@@ -127,9 +129,56 @@ def change_order_status(
     if order["status"] == new_status:
         return order
 
+    if order["status"] == "draft" and new_status != "draft" and not order["items"]:
+        raise ValueError("cannot leave draft with an empty order")
+
     if order["status"] != "draft" and new_status == "draft":
         raise ValueError("cannot move non-draft order back to draft")
 
     order["status"] = new_status
     order["updated_at"] = _utc_now_iso()
+    return order
+
+
+def pay_order(user_ref: str, order_id: int, payment_ref: str) -> dict:
+    if not payment_ref or not payment_ref.strip():
+        raise ValueError("payment_ref is required")
+
+    order = get_order_for_user(user_ref=user_ref, order_id=order_id)
+    if order is None:
+        raise LookupError("order not found")
+
+    if not order["items"]:
+        raise ValueError("cannot pay an empty order")
+
+    if order["status"] == "cancelled":
+        raise ValueError("cannot pay a cancelled order")
+
+    existing_ref = order.get("payment_ref")
+    if order["status"] == "paid":
+        if existing_ref == payment_ref:
+            return order
+        raise ValueError("order already paid with a different payment_ref")
+
+    # Pre-validacion para evitar descuentos parciales por falta de stock.
+    for item in order["items"]:
+        product = get_product_by_id(item["product_id"])
+        if product is None:
+            raise ValueError(f"product {item['product_id']} not found")
+
+        current_stock = int(product.get("stock", 0))
+        if current_stock < item["quantity"]:
+            raise ValueError(
+                f"insufficient stock for product {item['product_id']}"
+            )
+
+    # Solo si toda la orden tiene stock, descontamos.
+    for item in order["items"]:
+        decrement_stock(item["product_id"], item["quantity"])
+
+    now = _utc_now_iso()
+    order["status"] = "paid"
+    order["payment_ref"] = payment_ref
+    order["paid_at"] = now
+    order["updated_at"] = now
     return order
