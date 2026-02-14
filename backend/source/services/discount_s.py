@@ -10,6 +10,17 @@ _discounts: list[dict] = []
 _next_discount_id = 1
 
 
+def _coerce_datetime(value) -> datetime | None:
+    if value is None or isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
 def list_discounts() -> list[dict]:
     return _discounts
 
@@ -111,8 +122,8 @@ def is_discount_currently_valid(discount: dict, at: datetime | None = None) -> b
     if not discount.get("is_active", False):
         return False
 
-    starts_at = discount.get("starts_at")
-    ends_at = discount.get("ends_at")
+    starts_at = _coerce_datetime(discount.get("starts_at"))
+    ends_at = _coerce_datetime(discount.get("ends_at"))
 
     if starts_at is not None and now < starts_at:
         return False

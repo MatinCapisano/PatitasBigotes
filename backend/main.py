@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from auth.security import decode_access_token
 from source.services.discount_s import (
+    create_discount,
     delete_discount,
     list_discounts,
     update_discount,
@@ -19,7 +20,11 @@ from source.services.orders_s import (
     pay_order,
     remove_item_from_draft_order,
 )
-from source.services.products_s import filter_and_sort_products, get_product_by_id
+from source.services.products_s import (
+    filter_and_sort_products,
+    get_product_by_id,
+    get_variant_by_id,
+)
 
 app = FastAPI(
     title="Sales API",
@@ -66,7 +71,7 @@ def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
 
 
 class AddOrderItemRequest(BaseModel):
-    product_id: int
+    variant_id: int
     quantity: int = Field(gt=0)
 
 
@@ -93,6 +98,19 @@ class UpdateDiscountRequest(BaseModel):
     starts_at: datetime | None = None
     ends_at: datetime | None = None
     product_ids: list[int] | None = None
+
+
+class CreateDiscountRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    type: Literal["percent", "fixed"]
+    value: float = Field(gt=0)
+    scope: Literal["all", "category", "product", "product_list"]
+    scope_value: str | None = None
+    is_active: bool = True
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    product_ids: list[int] = Field(default_factory=list)
 
 
 class PayOrderRequest(BaseModel):
@@ -242,14 +260,14 @@ def add_item_to_draft(
     current_user: dict = Depends(get_current_user),
 ):
     user_ref = str(current_user["sub"])
-    product = get_product_by_id(payload.product_id)
-    if product is None:
-        raise HTTPException(status_code=404, detail="Product not found")
+    variant = get_variant_by_id(payload.variant_id)
+    if variant is None:
+        raise HTTPException(status_code=404, detail="Variant not found")
 
     try:
         order = add_item_to_draft_order(
             user_ref=user_ref,
-            product=product,
+            variant=variant,
             quantity=payload.quantity,
         )
     except ValueError as exc:
@@ -350,6 +368,19 @@ def pay_order_endpoint(
 @app.get("/discounts")
 def get_discounts(_: dict = Depends(require_admin)):
     return {"data": list_discounts()}
+
+
+@app.post("/discounts", status_code=status.HTTP_201_CREATED)
+def post_discount(
+    payload: CreateDiscountRequest,
+    _: dict = Depends(require_admin),
+):
+    try:
+        discount = create_discount(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"data": discount}
 
 
 @app.patch("/discounts/{discount_id}")

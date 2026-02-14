@@ -40,6 +40,28 @@ class Product(Base):
 
     category = relationship("Category", back_populates="products")
     discount_links = relationship("DiscountProduct", back_populates="product")
+    variants = relationship("ProductVariant", back_populates="product")
+
+
+class ProductVariant(Base):
+    __tablename__ = "product_variants"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    product_id = Column(
+        Integer,
+        ForeignKey("products.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    sku = Column(String, nullable=False, unique=True, index=True)
+    size = Column(String, nullable=True)
+    color = Column(String, nullable=True)
+    price = Column(Float, nullable=False)
+    stock = Column(Integer, nullable=False, default=0)
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    product = relationship("Product", back_populates="variants")
 
 
 class User(Base):
@@ -74,11 +96,18 @@ class Order(Base):
     )
 
     status = Column(String, nullable=False, default="draft")
+    currency = Column(String, nullable=False, default="ARS")
     subtotal = Column(Float, nullable=False, default=0)
     discount_total = Column(Float, nullable=False, default=0)
     total_amount = Column(Float, nullable=False, default=0)
     pricing_frozen = Column(Boolean, nullable=False, default=False)
     pricing_frozen_at = Column(DateTime, nullable=True)
+    submitted_at = Column(DateTime, nullable=True)
+    paid_at = Column(DateTime, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     updated_at = Column(
         DateTime,
@@ -88,7 +117,16 @@ class Order(Base):
     )
 
     user = relationship("User", back_populates="orders")
-    items = relationship("OrderItem", back_populates="order")
+    items = relationship(
+        "OrderItem",
+        back_populates="order",
+        cascade="all, delete-orphan",
+    )
+    payments = relationship(
+        "Payment",
+        back_populates="order",
+        cascade="all, delete-orphan",
+    )
 
 
 class OrderItem(Base):
@@ -107,6 +145,11 @@ class OrderItem(Base):
         ForeignKey("products.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    variant_id = Column(
+        Integer,
+        ForeignKey("product_variants.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
 
     quantity = Column(Integer, nullable=False)
     unit_price = Column(Float, nullable=False)
@@ -121,7 +164,45 @@ class OrderItem(Base):
 
     order = relationship("Order", back_populates="items")
     product = relationship("Product")
+    variant = relationship("ProductVariant")
     discount = relationship("Discount")
+
+
+class Payment(Base):
+    __tablename__ = "payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    order_id = Column(
+        Integer,
+        ForeignKey("orders.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    method = Column(String, nullable=False)  # bank_transfer | mercadopago
+    status = Column(String, nullable=False, default="pending")
+    amount = Column(Float, nullable=False)
+    currency = Column(String, nullable=False, default="ARS")
+
+    idempotency_key = Column(String, nullable=False, unique=True, index=True)
+    external_ref = Column(String, nullable=True, index=True)
+    provider_status = Column(String, nullable=True)
+    provider_payload = Column(String, nullable=True)
+    receipt_url = Column(String, nullable=True)
+
+    expires_at = Column(DateTime, nullable=True)
+    paid_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    order = relationship("Order", back_populates="payments")
 
 
 class Discount(Base):

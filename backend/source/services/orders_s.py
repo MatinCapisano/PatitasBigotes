@@ -8,7 +8,11 @@ from source.services.discount_s import (
     reprice_order_items,
     validate_order_pricing_before_submit,
 )
-from source.services.products_s import get_product_by_id, decrement_stock
+from source.services.products_s import (
+    decrement_variant_stock,
+    get_product_by_id,
+    get_variant_by_id,
+)
 
 ALLOWED_ORDER_STATUS = {"draft", "submitted", "paid", "cancelled"}
 
@@ -24,9 +28,13 @@ def _utc_now_iso() -> str:
 def _recalculate_order_total(order: dict) -> None:
     products_by_id: dict[int, dict] = {}
     for item in order["items"]:
-        product = get_product_by_id(item["product_id"])
+        variant = get_variant_by_id(item["variant_id"])
+        if variant is None:
+            raise ValueError(f"variant {item['variant_id']} not found")
+
+        product = get_product_by_id(variant["product_id"])
         if product is not None:
-            products_by_id[item["product_id"]] = product
+            products_by_id[variant["product_id"]] = product
 
     reprice_order_items(
         order=order,
@@ -82,7 +90,7 @@ def get_order_for_user(user_ref: str, order_id: int) -> dict | None:
 
 def add_item_to_draft_order(
     user_ref: str,
-    product: dict,
+    variant: dict,
     quantity: int,
 ) -> dict:
     global _next_item_id
@@ -95,18 +103,24 @@ def add_item_to_draft_order(
         raise ValueError("items can only be edited in draft status")
 
     for item in order["items"]:
-        if item["product_id"] == product["id"]:
+        if item["variant_id"] == variant["id"]:
             item["quantity"] += quantity
             _recalculate_order_total(order)
             return order
+
+    product = get_product_by_id(variant["product_id"])
+    if product is None:
+        raise ValueError("product not found")
 
     order["items"].append(
         {
             "id": _next_item_id,
             "product_id": product["id"],
+            "variant_id": variant["id"],
             "product_name": product.get("name"),
+            "variant_label": f"{variant.get('size', '-')}/{variant.get('color', '-')}",
             "quantity": quantity,
-            "unit_price": float(product["price"]),
+            "unit_price": float(variant["price"]),
         }
     )
     _next_item_id += 1
@@ -177,14 +191,14 @@ def pay_order(
     if order is None:
         raise LookupError("order not found")
 
+    if order["status"] == "cancelled":
+        raise ValueError("cannot pay a cancelled order")
+
     if order["status"] != "submitted" and order["status"] != "paid":
         raise ValueError("order can only be paid from submitted status")
 
     if not order["items"]:
         raise ValueError("cannot pay an empty order")
-
-    if order["status"] == "cancelled":
-        raise ValueError("cannot pay a cancelled order")
 
     expected_total = round(float(order.get("total_amount", 0.0)), 2)
     received_total = round(float(paid_amount), 2)
@@ -199,19 +213,19 @@ def pay_order(
 
     # Pre-validacion para evitar descuentos parciales por falta de stock.
     for item in order["items"]:
-        product = get_product_by_id(item["product_id"])
-        if product is None:
-            raise ValueError(f"product {item['product_id']} not found")
+        variant = get_variant_by_id(item["variant_id"])
+        if variant is None:
+            raise ValueError(f"variant {item['variant_id']} not found")
 
-        current_stock = int(product.get("stock", 0))
+        current_stock = int(variant.get("stock", 0))
         if current_stock < item["quantity"]:
             raise ValueError(
-                f"insufficient stock for product {item['product_id']}"
+                f"insufficient stock for variant {item['variant_id']}"
             )
 
     # Solo si toda la orden tiene stock, descontamos.
     for item in order["items"]:
-        decrement_stock(item["product_id"], item["quantity"])
+        decrement_variant_stock(item["variant_id"], item["quantity"])
 
     now = _utc_now_iso()
     order["status"] = "paid"
