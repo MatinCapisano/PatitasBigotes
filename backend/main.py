@@ -4,8 +4,11 @@ from typing import Literal, Optional
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from auth.security import decode_access_token
+from source.db.session import get_db
 from source.services.discount_s import (
     create_discount,
     delete_discount,
@@ -32,6 +35,28 @@ app = FastAPI(
     description="API para página de ventas. Etapa inicial."
 )
 bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def _raise_http_error_from_exception(exc: Exception, db: Session | None = None) -> None:
+    if db is not None and isinstance(exc, (IntegrityError, SQLAlchemyError)):
+        db.rollback()
+
+    if isinstance(exc, LookupError):
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(exc, IntegrityError):
+        raise HTTPException(
+            status_code=409,
+            detail="database constraint violation",
+        ) from exc
+    if isinstance(exc, SQLAlchemyError):
+        raise HTTPException(
+            status_code=500,
+            detail="database error",
+        ) from exc
+
+    raise exc
 
 
 def get_current_user(
@@ -141,6 +166,7 @@ def get_products(
     category: Optional[str] = Query(None),
     sort_by: Optional[Literal["price", "name"]] = Query(None),
     sort_order: Literal["asc", "desc"] = Query("asc"),
+    _db: Session = Depends(get_db),
 ):
     products = filter_and_sort_products(
         min_price=min_price,
@@ -164,7 +190,10 @@ def get_products(
     }
 
 @app.get("/products/{product_id}")
-def get_product(product_id: int):
+def get_product(
+    product_id: int,
+    _db: Session = Depends(get_db),
+):
     product = get_product_by_id(product_id)
 
     if product is None:
@@ -179,7 +208,10 @@ def get_product(product_id: int):
 
 
 @app.post("/products")
-def create_product(_: dict = Depends(require_admin)):
+def create_product(
+    _: dict = Depends(require_admin),
+    _db: Session = Depends(get_db),
+):
     return {
         "data": {
             "id": 1,
@@ -189,7 +221,11 @@ def create_product(_: dict = Depends(require_admin)):
 
 
 @app.put("/products/{product_id}")
-def update_product(product_id: int, _: dict = Depends(require_admin)):
+def update_product(
+    product_id: int,
+    _: dict = Depends(require_admin),
+    _db: Session = Depends(get_db),
+):
     return {
         "data": {
             "id": product_id,
@@ -199,7 +235,11 @@ def update_product(product_id: int, _: dict = Depends(require_admin)):
 
 
 @app.patch("/products/{product_id}")
-def patch_product(product_id: int, _: dict = Depends(require_admin)):
+def patch_product(
+    product_id: int,
+    _: dict = Depends(require_admin),
+    _db: Session = Depends(get_db),
+):
     return {
         "data": {
             "id": product_id,
@@ -209,7 +249,11 @@ def patch_product(product_id: int, _: dict = Depends(require_admin)):
 
 
 @app.delete("/products/{product_id}")
-def delete_product(product_id: int, _: dict = Depends(require_admin)):
+def delete_product(
+    product_id: int,
+    _: dict = Depends(require_admin),
+    _db: Session = Depends(get_db),
+):
     return {
         "data": {
             "id": product_id,
@@ -223,7 +267,10 @@ def delete_product(product_id: int, _: dict = Depends(require_admin)):
 # -------------------------
 
 @app.post("/users")
-def create_user(payload: CreateUserRequest):
+def create_user(
+    payload: CreateUserRequest,
+    _db: Session = Depends(get_db),
+):
     user_data = payload.model_dump()
     return {
         "data": {
@@ -243,9 +290,15 @@ def create_user(payload: CreateUserRequest):
 # -------------------------
 
 @app.get("/orders/draft")
-def get_or_create_draft(current_user: dict = Depends(get_current_user)):
+def get_or_create_draft(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     user_ref = str(current_user["sub"])
-    order, created = get_or_create_draft_order(user_ref)
+    try:
+        order, created = get_or_create_draft_order(user_ref)
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
     return {
         "data": order,
         "meta": {
@@ -258,6 +311,7 @@ def get_or_create_draft(current_user: dict = Depends(get_current_user)):
 def add_item_to_draft(
     payload: AddOrderItemRequest,
     current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     user_ref = str(current_user["sub"])
     variant = get_variant_by_id(payload.variant_id)
@@ -270,8 +324,8 @@ def add_item_to_draft(
             variant=variant,
             quantity=payload.quantity,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
 
     return {"data": order}
 
@@ -280,12 +334,13 @@ def add_item_to_draft(
 def remove_item_from_draft(
     item_id: int,
     current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     user_ref = str(current_user["sub"])
     try:
         order = remove_item_from_draft_order(user_ref=user_ref, item_id=item_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
 
     if order is None:
         raise HTTPException(status_code=404, detail="Draft order item not found")
@@ -298,6 +353,7 @@ def update_order_status(
     order_id: int,
     payload: UpdateOrderStatusRequest,
     current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     user_ref = str(current_user["sub"])
     current_order = get_order_for_user(user_ref=user_ref, order_id=order_id)
@@ -315,10 +371,8 @@ def update_order_status(
             order_id=order_id,
             new_status=payload.status,
         )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
 
     return {"data": order}
 
@@ -327,9 +381,13 @@ def update_order_status(
 def get_order(
     order_id: int,
     current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     user_ref = str(current_user["sub"])
-    order = get_order_for_user(user_ref=user_ref, order_id=order_id)
+    try:
+        order = get_order_for_user(user_ref=user_ref, order_id=order_id)
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found")
     return {"data": order}
@@ -340,6 +398,7 @@ def pay_order_endpoint(
     order_id: int,
     payload: PayOrderRequest,
     current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     payment_ref = payload.payment_ref.strip()
     if not payment_ref:
@@ -353,10 +412,8 @@ def pay_order_endpoint(
             payment_ref=payment_ref,
             paid_amount=payload.paid_amount,
         )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
 
     return {"data": order}
 
@@ -366,19 +423,26 @@ def pay_order_endpoint(
 # -------------------------
 
 @app.get("/discounts")
-def get_discounts(_: dict = Depends(require_admin)):
-    return {"data": list_discounts()}
+def get_discounts(
+    _: dict = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        return {"data": list_discounts()}
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
 
 
 @app.post("/discounts", status_code=status.HTTP_201_CREATED)
 def post_discount(
     payload: CreateDiscountRequest,
     _: dict = Depends(require_admin),
+    db: Session = Depends(get_db),
 ):
     try:
         discount = create_discount(payload.model_dump())
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
 
     return {"data": discount}
 
@@ -388,12 +452,13 @@ def patch_discount(
     discount_id: int,
     payload: UpdateDiscountRequest,
     _: dict = Depends(require_admin),
+    db: Session = Depends(get_db),
 ):
     updates = payload.model_dump(exclude_none=True)
     try:
         discount = update_discount(discount_id=discount_id, updates=updates)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
 
     if discount is None:
         raise HTTPException(status_code=404, detail="discount not found")
@@ -402,8 +467,15 @@ def patch_discount(
 
 
 @app.delete("/discounts/{discount_id}")
-def remove_discount(discount_id: int, _: dict = Depends(require_admin)):
-    discount = delete_discount(discount_id=discount_id)
+def remove_discount(
+    discount_id: int,
+    _: dict = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        discount = delete_discount(discount_id=discount_id)
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
     if discount is None:
         raise HTTPException(status_code=404, detail="discount not found")
     return {"data": discount}
@@ -414,7 +486,10 @@ def remove_discount(discount_id: int, _: dict = Depends(require_admin)):
 # -------------------------
 
 @app.post("/turns")
-def create_turn(_: dict = Depends(require_admin)):
+def create_turn(
+    _: dict = Depends(require_admin),
+    _db: Session = Depends(get_db),
+):
     return {
         "data": {
             "id": 1,
