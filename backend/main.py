@@ -23,6 +23,11 @@ from source.services.orders_s import (
     pay_order,
     remove_item_from_draft_order,
 )
+from source.services.payment_s import (
+    create_payment_for_order,
+    get_payment as get_payment_by_id,
+    list_payments_for_order,
+)
 from source.services.products_s import (
     filter_and_sort_products,
     get_product_by_id,
@@ -142,6 +147,18 @@ class PayOrderRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     payment_ref: str
     paid_amount: float = Field(gt=0)
+
+
+class CreateOrderPaymentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    method: Literal["bank_transfer", "mercadopago"]
+    currency: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=3,
+        pattern=r"^[A-Z]{3}$",
+    )
+    expires_in_minutes: int = Field(default=60, gt=0, le=1440)
 
 
 @app.get("/health")
@@ -416,6 +433,61 @@ def pay_order_endpoint(
         _raise_http_error_from_exception(exc, db=db)
 
     return {"data": order}
+
+
+@app.post("/orders/{order_id}/payments", status_code=status.HTTP_201_CREATED)
+def create_order_payment(
+    order_id: int,
+    payload: CreateOrderPaymentRequest,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        payment = create_payment_for_order(
+            order_id=order_id,
+            method=payload.method,
+            db=db,
+            currency=payload.currency,
+            expires_in_minutes=payload.expires_in_minutes,
+        )
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
+
+    return {"data": payment}
+
+
+@app.get("/orders/{order_id}/payments")
+def list_order_payments(
+    order_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        payments = list_payments_for_order(
+            order_id=order_id,
+            db=db,
+        )
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
+
+    return {"data": payments}
+
+
+@app.get("/payments/{payment_id}")
+def get_payment(
+    payment_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        payment = get_payment_by_id(
+            payment_id=payment_id,
+            db=db,
+        )
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
+
+    return {"data": payment}
 
 
 # -------------------------
