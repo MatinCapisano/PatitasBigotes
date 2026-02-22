@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Iterable, TypedDict
 
+from sqlalchemy import insert
 from sqlalchemy.orm import Session, joinedload
 
 from source.db.models import Discount, DiscountProduct, Product
@@ -99,9 +100,12 @@ def _set_discount_product_list(db: Session, discount: Discount, product_ids: lis
         if existing_count != len(unique_ids):
             raise ValueError("one or more product_ids do not exist")
 
-    db.query(DiscountProduct).filter(DiscountProduct.discount_id == discount.id).delete()
-    for product_id in unique_ids:
-        db.add(DiscountProduct(discount_id=discount.id, product_id=product_id))
+    db.query(DiscountProduct).filter(
+        DiscountProduct.discount_id == discount.id
+    ).delete(synchronize_session=False)
+    if unique_ids:
+        rows = [{"discount_id": discount.id, "product_id": product_id} for product_id in unique_ids]
+        db.execute(insert(DiscountProduct), rows)
 
 
 def create_discount(payload: dict, db: Session | None = None) -> DiscountDTO:
