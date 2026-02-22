@@ -7,8 +7,16 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session, joinedload
 
+from source.db.config import (
+    get_mercadopago_env,
+    get_mercadopago_failure_url,
+    get_mercadopago_notification_url,
+    get_mercadopago_pending_url,
+    get_mercadopago_success_url,
+)
 from source.db.models import Order, Payment
 from source.db.session import SessionLocal
+from source.services.mercadopago_client import create_checkout_preference
 
 ALLOWED_PAYMENT_METHODS = {"bank_transfer", "mercadopago"}
 
@@ -72,13 +80,56 @@ def _build_mercadopago_payload(
     payment_id: int,
     amount: float,
     currency: str,
+    expires_at: datetime,
 ) -> tuple[str, dict]:
     external_ref = f"mp-order-{order_id}-pay-{payment_id}"
+    preference_payload = {
+        "external_reference": external_ref,
+        "items": [
+            {
+                "id": str(payment_id),
+                "title": f"Order #{order_id}",
+                "quantity": 1,
+                "currency_id": currency,
+                "unit_price": amount,
+            }
+        ],
+        "back_urls": {
+            "success": get_mercadopago_success_url(),
+            "failure": get_mercadopago_failure_url(),
+            "pending": get_mercadopago_pending_url(),
+        },
+        "notification_url": get_mercadopago_notification_url(),
+        "expires": True,
+        "date_of_expiration": expires_at.replace(microsecond=0).isoformat() + "Z",
+        "metadata": {
+            "order_id": order_id,
+            "payment_id": payment_id,
+            "external_ref": external_ref,
+            "currency": currency,
+            "amount": amount,
+        },
+    }
+    provider_response = create_checkout_preference(preference_payload)
+    env = get_mercadopago_env()
+    checkout_url = (
+        provider_response.get("sandbox_init_point")
+        if env == "sandbox"
+        else provider_response.get("init_point")
+    )
+    if not checkout_url:
+        checkout_url = provider_response.get("init_point") or provider_response.get(
+            "sandbox_init_point"
+        )
     payload = {
         "checkout": {
             "provider": "mercadopago",
+            "environment": env,
             "external_ref": external_ref,
-            "checkout_url": f"https://www.mercadopago.com/checkout/v1/redirect?pref_id={external_ref}",
+            "preference_id": provider_response.get("id"),
+            "checkout_url": checkout_url,
+            "init_point": provider_response.get("init_point"),
+            "sandbox_init_point": provider_response.get("sandbox_init_point"),
             "amount": amount,
             "currency": currency,
         }
@@ -124,6 +175,7 @@ def create_payment_for_order(
 
         now = datetime.utcnow()
         payment_currency = currency or order.currency or "ARS"
+        expires_at = now + timedelta(minutes=expires_in_minutes)
         payment = Payment(
             order_id=order.id,
             method=method,
@@ -135,7 +187,7 @@ def create_payment_for_order(
             provider_status=None,
             provider_payload=None,
             receipt_url=None,
-            expires_at=now + timedelta(minutes=expires_in_minutes),
+            expires_at=expires_at,
             paid_at=None,
         )
         session.add(payment)
@@ -155,8 +207,10 @@ def create_payment_for_order(
                 payment_id=payment.id,
                 amount=amount,
                 currency=payment_currency,
+                expires_at=expires_at,
             )
             payment.external_ref = external_ref
+            payment.provider_status = "preference_created"
             payment.provider_payload = _serialize_provider_payload(provider_payload)
 
         session.flush()
