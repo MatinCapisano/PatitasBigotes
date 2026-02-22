@@ -3,8 +3,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 import json
-from uuid import uuid4
 
+from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from source.db.config import (
@@ -56,6 +57,43 @@ def _serialize_provider_payload(payload: dict | None) -> str | None:
     if payload is None:
         return None
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+
+
+def _find_active_pending_payment(
+    session: Session,
+    *,
+    order_id: int,
+    method: str,
+    now: datetime,
+) -> Payment | None:
+    return (
+        session.query(Payment)
+        .filter(
+            Payment.order_id == order_id,
+            Payment.method == method,
+            Payment.status == "pending",
+            or_(Payment.expires_at.is_(None), Payment.expires_at > now),
+        )
+        .order_by(Payment.created_at.desc(), Payment.id.desc())
+        .first()
+    )
+
+
+def _validate_active_pending_compatibility(
+    active_payment: Payment,
+    *,
+    requested_amount: float,
+    requested_currency: str,
+) -> None:
+    active_amount = round(float(active_payment.amount), 2)
+    if active_amount != round(float(requested_amount), 2):
+        raise ValueError(
+            "there is already an active pending payment with a different amount"
+        )
+    if active_payment.currency != requested_currency:
+        raise ValueError(
+            "there is already an active pending payment with a different currency"
+        )
 
 
 def _build_bank_transfer_payload(
@@ -143,6 +181,7 @@ def create_payment_for_order(
     db: Session | None = None,
     *,
     user_id: int | None = None,
+    idempotency_key: str,
     currency: str | None = None,
     expires_in_minutes: int = 60,
 ) -> dict:
@@ -150,12 +189,35 @@ def create_payment_for_order(
         raise ValueError("invalid payment method")
     if expires_in_minutes <= 0:
         raise ValueError("expires_in_minutes must be greater than 0")
+    normalized_key = idempotency_key.strip()
+    if not normalized_key:
+        raise ValueError("idempotency_key is required")
 
     with _session_scope(db) as (session, owns_session):
+        existing_payment = (
+            session.query(Payment)
+            .options(joinedload(Payment.order))
+            .filter(Payment.idempotency_key == normalized_key)
+            .first()
+        )
+        if existing_payment is not None:
+            if existing_payment.order_id != order_id:
+                raise ValueError(
+                    "idempotency key already used for a different order"
+                )
+            if existing_payment.method != method:
+                raise ValueError(
+                    "idempotency key already used for a different payment method"
+                )
+            if user_id is not None and int(existing_payment.order.user_id) != int(user_id):
+                raise LookupError("order not found")
+            return _payment_to_dict(existing_payment)
+
         order = (
             session.query(Order)
             .options(joinedload(Order.items))
             .filter(Order.id == order_id)
+            .with_for_update()
             .first()
         )
         if order is None:
@@ -174,7 +236,21 @@ def create_payment_for_order(
             raise ValueError("order total must be greater than 0")
 
         now = datetime.utcnow()
+        active_pending_payment = _find_active_pending_payment(
+            session,
+            order_id=order.id,
+            method=method,
+            now=now,
+        )
         payment_currency = currency or order.currency or "ARS"
+        if active_pending_payment is not None:
+            _validate_active_pending_compatibility(
+                active_pending_payment,
+                requested_amount=amount,
+                requested_currency=payment_currency,
+            )
+            return _payment_to_dict(active_pending_payment)
+
         expires_at = now + timedelta(minutes=expires_in_minutes)
         payment = Payment(
             order_id=order.id,
@@ -182,7 +258,7 @@ def create_payment_for_order(
             status="pending",
             amount=amount,
             currency=payment_currency,
-            idempotency_key=str(uuid4()),
+            idempotency_key=normalized_key,
             external_ref=None,
             provider_status=None,
             provider_payload=None,
@@ -191,7 +267,35 @@ def create_payment_for_order(
             paid_at=None,
         )
         session.add(payment)
-        session.flush()
+        try:
+            session.flush()
+        except IntegrityError:
+            session.rollback()
+            payment_by_key = (
+                session.query(Payment)
+                .options(joinedload(Payment.order))
+                .filter(Payment.idempotency_key == normalized_key)
+                .first()
+            )
+            if payment_by_key is not None:
+                if user_id is not None and int(payment_by_key.order.user_id) != int(user_id):
+                    raise LookupError("order not found")
+                return _payment_to_dict(payment_by_key)
+
+            existing_pending = _find_active_pending_payment(
+                session,
+                order_id=order.id,
+                method=method,
+                now=now,
+            )
+            if existing_pending is not None:
+                _validate_active_pending_compatibility(
+                    existing_pending,
+                    requested_amount=amount,
+                    requested_currency=payment_currency,
+                )
+                return _payment_to_dict(existing_pending)
+            raise
 
         if method == "bank_transfer":
             provider_payload = _build_bank_transfer_payload(

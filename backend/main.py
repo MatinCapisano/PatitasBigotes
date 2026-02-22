@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -439,6 +439,7 @@ def pay_order_endpoint(
 def create_order_payment(
     order_id: int,
     payload: CreateOrderPaymentRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -449,6 +450,12 @@ def create_order_payment(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token subject",
         )
+    normalized_idempotency_key = idempotency_key.strip()
+    if not normalized_idempotency_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Idempotency-Key header is required",
+        )
 
     try:
         payment = create_payment_for_order(
@@ -456,6 +463,7 @@ def create_order_payment(
             method=payload.method,
             db=db,
             user_id=user_id,
+            idempotency_key=normalized_idempotency_key,
             currency=payload.currency,
             expires_in_minutes=payload.expires_in_minutes,
         )
