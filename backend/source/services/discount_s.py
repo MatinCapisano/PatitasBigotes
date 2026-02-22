@@ -1,13 +1,40 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime
-from typing import Iterable
+from typing import Iterable, TypedDict
+
+from sqlalchemy.orm import Session, joinedload
+
+from source.db.models import Discount, DiscountProduct, Product
+from source.db.session import SessionLocal
 
 ALLOWED_DISCOUNT_TYPES = {"percent", "fixed"}
 ALLOWED_DISCOUNT_SCOPES = {"all", "category", "product", "product_list"}
 
-_discounts: list[dict] = []
-_next_discount_id = 1
+
+class DiscountDTO(TypedDict):
+    id: int
+    name: str
+    type: str
+    value: float
+    scope: str
+    scope_value: str | int | None
+    is_active: bool
+    starts_at: datetime | None
+    ends_at: datetime | None
+    product_ids: list[int]
+
+
+@contextmanager
+def _session_scope(db: Session | None):
+    owns_session = db is None
+    session = db or SessionLocal()
+    try:
+        yield session, owns_session
+    finally:
+        if owns_session:
+            session.close()
 
 
 def _coerce_datetime(value) -> datetime | None:
@@ -21,72 +48,150 @@ def _coerce_datetime(value) -> datetime | None:
     return None
 
 
-def list_discounts() -> list[dict]:
-    return _discounts
+def _discount_to_dict(discount: Discount) -> DiscountDTO:
+    product_ids = [link.product_id for link in discount.product_links]
+    return {
+        "id": discount.id,
+        "name": discount.name,
+        "type": discount.type,
+        "value": float(discount.value),
+        "scope": discount.scope,
+        "scope_value": discount.scope_value,
+        "is_active": bool(discount.is_active),
+        "starts_at": discount.starts_at,
+        "ends_at": discount.ends_at,
+        "product_ids": product_ids,
+    }
 
 
-def get_discount_by_id(discount_id: int) -> dict | None:
-    for discount in _discounts:
-        if discount["id"] == discount_id:
-            return discount
-    return None
+def list_discounts(db: Session | None = None) -> list[DiscountDTO]:
+    with _session_scope(db) as (session, _):
+        discounts = (
+            session.query(Discount)
+            .options(joinedload(Discount.product_links))
+            .order_by(Discount.id.asc())
+            .all()
+        )
+        return [_discount_to_dict(discount) for discount in discounts]
 
 
-def create_discount(payload: dict) -> dict:
-    global _next_discount_id
+def get_discount_by_id(discount_id: int, db: Session | None = None) -> DiscountDTO | None:
+    with _session_scope(db) as (session, _):
+        discount = (
+            session.query(Discount)
+            .options(joinedload(Discount.product_links))
+            .filter(Discount.id == discount_id)
+            .first()
+        )
+        if discount is None:
+            return None
+        return _discount_to_dict(discount)
+
+
+def _set_discount_product_list(db: Session, discount: Discount, product_ids: list[int]) -> None:
+    unique_ids = list(dict.fromkeys(product_ids))
+    if unique_ids:
+        existing_count = (
+            db.query(Product.id)
+            .filter(Product.id.in_(unique_ids))
+            .count()
+        )
+        if existing_count != len(unique_ids):
+            raise ValueError("one or more product_ids do not exist")
+
+    db.query(DiscountProduct).filter(DiscountProduct.discount_id == discount.id).delete()
+    for product_id in unique_ids:
+        db.add(DiscountProduct(discount_id=discount.id, product_id=product_id))
+
+
+def create_discount(payload: dict, db: Session | None = None) -> DiscountDTO:
     _validate_discount_payload(payload)
 
-    discount = {
-        "id": _next_discount_id,
-        "name": payload["name"],
-        "type": payload["type"],
-        "value": float(payload["value"]),
-        "scope": payload["scope"],
-        "scope_value": payload.get("scope_value"),
-        "is_active": bool(payload.get("is_active", True)),
-        "starts_at": payload.get("starts_at"),
-        "ends_at": payload.get("ends_at"),
-        "product_ids": list(dict.fromkeys(payload.get("product_ids", []))),
-    }
-    _next_discount_id += 1
-    _discounts.append(discount)
-    return discount
+    with _session_scope(db) as (session, owns_session):
+        discount = Discount(
+            name=payload["name"],
+            type=payload["type"],
+            value=float(payload["value"]),
+            scope=payload["scope"],
+            scope_value=payload.get("scope_value"),
+            is_active=bool(payload.get("is_active", True)),
+            starts_at=_coerce_datetime(payload.get("starts_at")),
+            ends_at=_coerce_datetime(payload.get("ends_at")),
+        )
+        session.add(discount)
+        session.flush()
+
+        if discount.scope == "product_list":
+            _set_discount_product_list(
+                db=session,
+                discount=discount,
+                product_ids=payload.get("product_ids", []),
+            )
+
+        if owns_session:
+            session.commit()
+        else:
+            session.flush()
+        session.refresh(discount)
+        return get_discount_by_id(discount.id, db=session)
 
 
-def update_discount(discount_id: int, updates: dict) -> dict | None:
-    discount = get_discount_by_id(discount_id)
-    if discount is None:
-        return None
+def update_discount(discount_id: int, updates: dict, db: Session | None = None) -> DiscountDTO | None:
+    with _session_scope(db) as (session, owns_session):
+        discount = session.query(Discount).filter(Discount.id == discount_id).first()
+        if discount is None:
+            return None
 
-    merged = {**discount, **updates}
-    _validate_discount_payload(merged)
+        current = get_discount_by_id(discount_id=discount_id, db=session)
+        if current is None:
+            return None
 
-    for field in (
-        "name",
-        "type",
-        "value",
-        "scope",
-        "scope_value",
-        "is_active",
-        "starts_at",
-        "ends_at",
-    ):
-        if field in updates:
-            discount[field] = merged[field]
+        merged = {**current, **updates}
+        _validate_discount_payload(merged)
 
-    if "product_ids" in updates:
-        set_discount_product_list(discount, updates["product_ids"])
+        discount.name = merged["name"]
+        discount.type = merged["type"]
+        discount.value = float(merged["value"])
+        discount.scope = merged["scope"]
+        discount.scope_value = merged.get("scope_value")
+        discount.is_active = bool(merged.get("is_active", True))
+        discount.starts_at = _coerce_datetime(merged.get("starts_at"))
+        discount.ends_at = _coerce_datetime(merged.get("ends_at"))
 
-    return discount
+        if merged["scope"] == "product_list":
+            _set_discount_product_list(
+                db=session,
+                discount=discount,
+                product_ids=merged.get("product_ids", []),
+            )
+        else:
+            session.query(DiscountProduct).filter(DiscountProduct.discount_id == discount.id).delete()
+
+        if owns_session:
+            session.commit()
+        else:
+            session.flush()
+        session.refresh(discount)
+        return get_discount_by_id(discount_id, db=session)
 
 
-def delete_discount(discount_id: int) -> dict | None:
-    for idx, discount in enumerate(_discounts):
-        if discount["id"] == discount_id:
-            removed = _discounts[idx]
-            del _discounts[idx]
-            return removed
-    return None
+def delete_discount(discount_id: int, db: Session | None = None) -> DiscountDTO | None:
+    with _session_scope(db) as (session, owns_session):
+        discount = (
+            session.query(Discount)
+            .options(joinedload(Discount.product_links))
+            .filter(Discount.id == discount_id)
+            .first()
+        )
+        if discount is None:
+            return None
+        serialized = _discount_to_dict(discount)
+        session.delete(discount)
+        if owns_session:
+            session.commit()
+        else:
+            session.flush()
+        return serialized
 
 
 def _validate_discount_payload(payload: dict) -> None:
@@ -117,7 +222,7 @@ def _validate_discount_payload(payload: dict) -> None:
 
 
 # Core (pure logic)
-def is_discount_currently_valid(discount: dict, at: datetime | None = None) -> bool:
+def is_discount_currently_valid(discount: DiscountDTO, at: datetime | None = None) -> bool:
     now = at or datetime.utcnow()
     if not discount.get("is_active", False):
         return False
@@ -132,8 +237,8 @@ def is_discount_currently_valid(discount: dict, at: datetime | None = None) -> b
     return True
 
 
-def select_best_discount(discounts: Iterable[dict], unit_price: float) -> dict | None:
-    best: dict | None = None
+def select_best_discount(discounts: Iterable[DiscountDTO], unit_price: float) -> DiscountDTO | None:
+    best: DiscountDTO | None = None
     best_amount = 0.0
 
     for discount in discounts:
@@ -145,7 +250,7 @@ def select_best_discount(discounts: Iterable[dict], unit_price: float) -> dict |
     return best
 
 
-def calculate_line_discount(unit_price: float, discount: dict) -> float:
+def calculate_line_discount(unit_price: float, discount: DiscountDTO) -> float:
     discount_type = discount.get("type")
     value = float(discount.get("value", 0))
 
@@ -162,7 +267,7 @@ def calculate_line_discount(unit_price: float, discount: dict) -> float:
     return max(0.0, min(amount, unit_price))
 
 
-def calculate_line_pricing(unit_price: float, quantity: int, discount: dict | None) -> dict:
+def calculate_line_pricing(unit_price: float, quantity: int, discount: DiscountDTO | None) -> dict:
     if quantity <= 0:
         raise ValueError("quantity must be greater than 0")
 
@@ -184,9 +289,8 @@ def calculate_line_pricing(unit_price: float, quantity: int, discount: dict | No
     }
 
 
-# Query/repository-facing (stubs)
-def get_applicable_discounts_for_product(product: dict, discounts: Iterable[dict]) -> list[dict]:
-    applicable: list[dict] = []
+def get_applicable_discounts_for_product(product: dict, discounts: Iterable[DiscountDTO]) -> list[DiscountDTO]:
+    applicable: list[DiscountDTO] = []
     product_id = product.get("id")
     category = product.get("category")
 
@@ -211,19 +315,19 @@ def get_applicable_discounts_for_product(product: dict, discounts: Iterable[dict
     return applicable
 
 
-def set_discount_product_list(discount: dict, product_ids: list[int]) -> dict:
+def set_discount_product_list(discount: DiscountDTO, product_ids: list[int]) -> DiscountDTO:
     discount["product_ids"] = list(dict.fromkeys(product_ids))
     return discount
 
 
-def add_products_to_discount(discount: dict, product_ids: list[int]) -> dict:
+def add_products_to_discount(discount: DiscountDTO, product_ids: list[int]) -> DiscountDTO:
     current = set(discount.get("product_ids", []))
     current.update(product_ids)
     discount["product_ids"] = sorted(current)
     return discount
 
 
-def remove_products_from_discount(discount: dict, product_ids: list[int]) -> dict:
+def remove_products_from_discount(discount: DiscountDTO, product_ids: list[int]) -> DiscountDTO:
     to_remove = set(product_ids)
     current = [pid for pid in discount.get("product_ids", []) if pid not in to_remove]
     discount["product_ids"] = current
@@ -231,7 +335,7 @@ def remove_products_from_discount(discount: dict, product_ids: list[int]) -> dic
 
 
 # Order orchestration helpers
-def reprice_order_items(order: dict, discounts: Iterable[dict], products_by_id: dict[int, dict]) -> dict:
+def reprice_order_items(order: dict, discounts: Iterable[DiscountDTO], products_by_id: dict[int, dict]) -> dict:
     for item in order.get("items", []):
         product = products_by_id.get(item["product_id"])
         if product is None:
