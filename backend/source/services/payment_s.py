@@ -59,6 +59,28 @@ def _serialize_provider_payload(payload: dict | None) -> str | None:
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
 
 
+def _deserialize_provider_payload(payload: str | None) -> dict | None:
+    if payload is None:
+        return None
+    try:
+        parsed = json.loads(payload)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
+
+
+def _has_checkout_preference(payload: dict | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    checkout = payload.get("checkout")
+    if not isinstance(checkout, dict):
+        return False
+    preference_id = checkout.get("preference_id")
+    return isinstance(preference_id, str) and bool(preference_id.strip())
+
+
 def _find_active_pending_payment(
     session: Session,
     *,
@@ -119,8 +141,10 @@ def _build_mercadopago_payload(
     amount: float,
     currency: str,
     expires_at: datetime,
+    payment_idempotency_key: str,
 ) -> tuple[str, dict]:
     external_ref = f"mp-order-{order_id}-pay-{payment_id}"
+    provider_idempotency_key = f"mp-preference-{payment_idempotency_key}"
     preference_payload = {
         "external_reference": external_ref,
         "items": [
@@ -148,7 +172,10 @@ def _build_mercadopago_payload(
             "amount": amount,
         },
     }
-    provider_response = create_checkout_preference(preference_payload)
+    provider_response = create_checkout_preference(
+        preference_payload,
+        idempotency_key=provider_idempotency_key,
+    )
     env = get_mercadopago_env()
     checkout_url = (
         provider_response.get("sandbox_init_point")
@@ -164,6 +191,7 @@ def _build_mercadopago_payload(
             "provider": "mercadopago",
             "environment": env,
             "external_ref": external_ref,
+            "provider_idempotency_key": provider_idempotency_key,
             "preference_id": provider_response.get("id"),
             "checkout_url": checkout_url,
             "init_point": provider_response.get("init_point"),
@@ -270,6 +298,9 @@ def create_payment_for_order(
         try:
             session.flush()
         except IntegrityError:
+            if not owns_session:
+                raise
+
             session.rollback()
             payment_by_key = (
                 session.query(Payment)
@@ -306,16 +337,23 @@ def create_payment_for_order(
             )
             payment.provider_payload = _serialize_provider_payload(provider_payload)
         elif method == "mercadopago":
-            external_ref, provider_payload = _build_mercadopago_payload(
-                order_id=order.id,
-                payment_id=payment.id,
-                amount=amount,
-                currency=payment_currency,
-                expires_at=expires_at,
+            existing_provider_payload = _deserialize_provider_payload(
+                payment.provider_payload
             )
-            payment.external_ref = external_ref
-            payment.provider_status = "preference_created"
-            payment.provider_payload = _serialize_provider_payload(provider_payload)
+            if _has_checkout_preference(existing_provider_payload):
+                payment.provider_status = payment.provider_status or "preference_created"
+            else:
+                external_ref, provider_payload = _build_mercadopago_payload(
+                    order_id=order.id,
+                    payment_id=payment.id,
+                    amount=amount,
+                    currency=payment_currency,
+                    expires_at=expires_at,
+                    payment_idempotency_key=normalized_key,
+                )
+                payment.external_ref = external_ref
+                payment.provider_status = "preference_created"
+                payment.provider_payload = _serialize_provider_payload(provider_payload)
 
         session.flush()
         if owns_session:
