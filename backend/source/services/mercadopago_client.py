@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from source.db.config import (
     get_mercadopago_access_token,
     get_mercadopago_timeout_seconds,
@@ -20,6 +22,9 @@ except ImportError as exc:  # pragma: no cover - dependency availability
 else:
     _import_error = None
 
+MAX_RETRY_ATTEMPTS = 3
+RETRY_BASE_DELAY_SECONDS = 0.2
+
 
 def _get_sdk():
     if mercadopago is None:
@@ -30,35 +35,62 @@ def _get_sdk():
     return mercadopago.SDK(get_mercadopago_access_token())
 
 
-def create_checkout_preference(preference_payload: dict) -> dict:
+def create_checkout_preference(
+    preference_payload: dict,
+    *,
+    idempotency_key: str | None = None,
+) -> dict:
     sdk = _get_sdk()
     options = {"timeout": get_mercadopago_timeout_seconds()}
-    try:
-        response = sdk.preference().create(preference_payload, options)
-    except TimeoutError as exc:
-        raise PaymentProviderTimeoutError("mercadopago request timed out") from exc
-    except Exception as exc:
-        raise PaymentProviderUnavailableError("mercadopago request failed") from exc
+    if idempotency_key:
+        options["headers"] = {"x-idempotency-key": idempotency_key}
+    for attempt in range(1, MAX_RETRY_ATTEMPTS + 1):
+        try:
+            response = sdk.preference().create(preference_payload, options)
+        except TimeoutError as exc:
+            if attempt == MAX_RETRY_ATTEMPTS:
+                raise PaymentProviderTimeoutError(
+                    "mercadopago request timed out"
+                ) from exc
+            time.sleep(RETRY_BASE_DELAY_SECONDS * attempt)
+            continue
+        except Exception as exc:
+            if attempt == MAX_RETRY_ATTEMPTS:
+                raise PaymentProviderUnavailableError(
+                    "mercadopago request failed"
+                ) from exc
+            time.sleep(RETRY_BASE_DELAY_SECONDS * attempt)
+            continue
 
-    status = int(response.get("status", 0))
-    data = response.get("response")
-    if status in {400, 422}:
-        raise PaymentProviderValidationError("mercadopago preference rejected")
-    if status in {401, 403}:
-        raise PaymentProviderAuthError("mercadopago credentials rejected")
-    if status >= 500:
-        raise PaymentProviderUnavailableError("mercadopago unavailable")
-    if status >= 400:
-        raise PaymentProviderError("mercadopago preference creation failed")
-    if not isinstance(data, dict):
-        raise PaymentProviderUnavailableError("mercadopago invalid response payload")
+        status = int(response.get("status", 0))
+        data = response.get("response")
+        if status in {400, 422}:
+            raise PaymentProviderValidationError("mercadopago preference rejected")
+        if status in {401, 403}:
+            raise PaymentProviderAuthError("mercadopago credentials rejected")
+        if status >= 500:
+            if attempt == MAX_RETRY_ATTEMPTS:
+                raise PaymentProviderUnavailableError("mercadopago unavailable")
+            time.sleep(RETRY_BASE_DELAY_SECONDS * attempt)
+            continue
+        if status >= 400:
+            raise PaymentProviderError("mercadopago preference creation failed")
+        if not isinstance(data, dict):
+            if attempt == MAX_RETRY_ATTEMPTS:
+                raise PaymentProviderUnavailableError(
+                    "mercadopago invalid response payload"
+                )
+            time.sleep(RETRY_BASE_DELAY_SECONDS * attempt)
+            continue
 
-    preference_id = data.get("id")
-    init_point = data.get("init_point")
-    sandbox_init_point = data.get("sandbox_init_point")
-    if not preference_id:
-        raise PaymentProviderValidationError("mercadopago preference id missing")
-    if not init_point and not sandbox_init_point:
-        raise PaymentProviderValidationError("mercadopago checkout url missing")
+        preference_id = data.get("id")
+        init_point = data.get("init_point")
+        sandbox_init_point = data.get("sandbox_init_point")
+        if not preference_id:
+            raise PaymentProviderValidationError("mercadopago preference id missing")
+        if not init_point and not sandbox_init_point:
+            raise PaymentProviderValidationError("mercadopago checkout url missing")
 
-    return data
+        return data
+
+    raise PaymentProviderUnavailableError("mercadopago preference creation failed")
