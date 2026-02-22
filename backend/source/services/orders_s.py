@@ -25,7 +25,10 @@ def _utc_now_iso() -> str:
     return datetime.utcnow().isoformat() + "Z"
 
 
-def _recalculate_order_total(order: dict) -> None:
+def _recalculate_order_total(order: dict, *, force: bool = False) -> None:
+    if order.get("pricing_frozen") and not force:
+        raise ValueError("cannot recalculate a frozen order")
+
     products_by_id: dict[int, dict] = {}
     for item in order["items"]:
         variant = get_variant_by_id(item["variant_id"])
@@ -167,7 +170,7 @@ def change_order_status(
         raise ValueError("cannot move non-draft order back to draft")
 
     if order["status"] == "draft" and new_status == "submitted":
-        _recalculate_order_total(order)
+        _recalculate_order_total(order, force=True)
         validate_order_pricing_before_submit(order)
         freeze_order_pricing(order)
 
@@ -194,7 +197,7 @@ def pay_order(
     if order["status"] == "cancelled":
         raise ValueError("cannot pay a cancelled order")
 
-    if order["status"] != "submitted" and order["status"] != "paid":
+    if order["status"] not in {"submitted", "paid"}:
         raise ValueError("order can only be paid from submitted status")
 
     if not order["items"]:
@@ -211,7 +214,6 @@ def pay_order(
             return order
         raise ValueError("order already paid with a different payment_ref")
 
-    # Pre-validacion para evitar descuentos parciales por falta de stock.
     for item in order["items"]:
         variant = get_variant_by_id(item["variant_id"])
         if variant is None:
@@ -219,11 +221,8 @@ def pay_order(
 
         current_stock = int(variant.get("stock", 0))
         if current_stock < item["quantity"]:
-            raise ValueError(
-                f"insufficient stock for variant {item['variant_id']}"
-            )
+            raise ValueError(f"insufficient stock for variant {item['variant_id']}")
 
-    # Solo si toda la orden tiene stock, descontamos.
     for item in order["items"]:
         decrement_variant_stock(item["variant_id"], item["quantity"])
 
