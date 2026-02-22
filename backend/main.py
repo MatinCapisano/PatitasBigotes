@@ -25,7 +25,7 @@ from source.services.orders_s import (
 )
 from source.services.payment_s import (
     create_payment_for_order,
-    get_payment as get_payment_by_id,
+    get_payment_for_user,
     list_payments_for_order,
 )
 from source.services.products_s import (
@@ -443,10 +443,19 @@ def create_order_payment(
     db: Session = Depends(get_db),
 ):
     try:
+        user_id = int(current_user["sub"])
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token subject",
+        )
+
+    try:
         payment = create_payment_for_order(
             order_id=order_id,
             method=payload.method,
             db=db,
+            user_id=user_id,
             currency=payload.currency,
             expires_in_minutes=payload.expires_in_minutes,
         )
@@ -463,8 +472,17 @@ def list_order_payments(
     db: Session = Depends(get_db),
 ):
     try:
+        user_id = int(current_user["sub"])
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token subject",
+        )
+
+    try:
         payments = list_payments_for_order(
             order_id=order_id,
+            user_id=user_id,
             db=db,
         )
     except Exception as exc:
@@ -480,8 +498,17 @@ def get_payment(
     db: Session = Depends(get_db),
 ):
     try:
-        payment = get_payment_by_id(
+        user_id = int(current_user["sub"])
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token subject",
+        )
+
+    try:
+        payment = get_payment_for_user(
             payment_id=payment_id,
+            user_id=user_id,
             db=db,
         )
     except Exception as exc:

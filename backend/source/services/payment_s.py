@@ -91,6 +91,7 @@ def create_payment_for_order(
     method: str,
     db: Session | None = None,
     *,
+    user_id: int | None = None,
     currency: str | None = None,
     expires_in_minutes: int = 60,
 ) -> dict:
@@ -107,6 +108,8 @@ def create_payment_for_order(
             .first()
         )
         if order is None:
+            raise LookupError("order not found")
+        if user_id is not None and int(order.user_id) != int(user_id):
             raise LookupError("order not found")
         if order.status == "cancelled":
             raise ValueError("cannot create payment for a cancelled order")
@@ -168,10 +171,15 @@ def create_payment_for_order(
 
 def list_payments_for_order(
     order_id: int,
+    user_id: int,
     db: Session | None = None,
 ) -> list[dict]:
     with _session_scope(db) as (session, _):
-        order = session.query(Order).filter(Order.id == order_id).first()
+        order = (
+            session.query(Order)
+            .filter(Order.id == order_id, Order.user_id == user_id)
+            .first()
+        )
         if order is None:
             raise LookupError("order not found")
 
@@ -184,12 +192,18 @@ def list_payments_for_order(
         return [_payment_to_dict(payment) for payment in payments]
 
 
-def get_payment(
+def get_payment_for_user(
     payment_id: int,
+    user_id: int,
     db: Session | None = None,
 ) -> dict:
     with _session_scope(db) as (session, _):
-        payment = session.query(Payment).filter(Payment.id == payment_id).first()
+        payment = (
+            session.query(Payment)
+            .join(Order, Payment.order_id == Order.id)
+            .filter(Payment.id == payment_id, Order.user_id == user_id)
+            .first()
+        )
         if payment is None:
             raise LookupError("payment not found")
 
