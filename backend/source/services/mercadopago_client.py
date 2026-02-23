@@ -35,6 +35,15 @@ def _get_sdk():
     return mercadopago.SDK(get_mercadopago_access_token())
 
 
+def _handle_response_status(status: int, *, operation: str) -> None:
+    if status in {400, 404, 422}:
+        raise PaymentProviderValidationError(f"mercadopago {operation} rejected")
+    if status in {401, 403}:
+        raise PaymentProviderAuthError("mercadopago credentials rejected")
+    if status >= 400:
+        raise PaymentProviderError(f"mercadopago {operation} failed")
+
+
 def create_checkout_preference(
     preference_payload: dict,
     *,
@@ -64,17 +73,12 @@ def create_checkout_preference(
 
         status = int(response.get("status", 0))
         data = response.get("response")
-        if status in {400, 422}:
-            raise PaymentProviderValidationError("mercadopago preference rejected")
-        if status in {401, 403}:
-            raise PaymentProviderAuthError("mercadopago credentials rejected")
         if status >= 500:
             if attempt == MAX_RETRY_ATTEMPTS:
                 raise PaymentProviderUnavailableError("mercadopago unavailable")
             time.sleep(RETRY_BASE_DELAY_SECONDS * attempt)
             continue
-        if status >= 400:
-            raise PaymentProviderError("mercadopago preference creation failed")
+        _handle_response_status(status, operation="preference creation")
         if not isinstance(data, dict):
             if attempt == MAX_RETRY_ATTEMPTS:
                 raise PaymentProviderUnavailableError(
@@ -94,3 +98,49 @@ def create_checkout_preference(
         return data
 
     raise PaymentProviderUnavailableError("mercadopago preference creation failed")
+
+
+def get_payment_by_id(payment_id: str | int) -> dict:
+    sdk = _get_sdk()
+    payment_id_str = str(payment_id).strip()
+    if not payment_id_str:
+        raise PaymentProviderValidationError("mercadopago payment id is required")
+
+    options = {"timeout": get_mercadopago_timeout_seconds()}
+    for attempt in range(1, MAX_RETRY_ATTEMPTS + 1):
+        try:
+            response = sdk.payment().get(payment_id_str, options)
+        except TimeoutError as exc:
+            if attempt == MAX_RETRY_ATTEMPTS:
+                raise PaymentProviderTimeoutError(
+                    "mercadopago request timed out"
+                ) from exc
+            time.sleep(RETRY_BASE_DELAY_SECONDS * attempt)
+            continue
+        except Exception as exc:
+            if attempt == MAX_RETRY_ATTEMPTS:
+                raise PaymentProviderUnavailableError(
+                    "mercadopago request failed"
+                ) from exc
+            time.sleep(RETRY_BASE_DELAY_SECONDS * attempt)
+            continue
+
+        status = int(response.get("status", 0))
+        data = response.get("response")
+        if status >= 500:
+            if attempt == MAX_RETRY_ATTEMPTS:
+                raise PaymentProviderUnavailableError("mercadopago unavailable")
+            time.sleep(RETRY_BASE_DELAY_SECONDS * attempt)
+            continue
+
+        _handle_response_status(status, operation="payment lookup")
+        if not isinstance(data, dict):
+            if attempt == MAX_RETRY_ATTEMPTS:
+                raise PaymentProviderUnavailableError(
+                    "mercadopago invalid response payload"
+                )
+            time.sleep(RETRY_BASE_DELAY_SECONDS * attempt)
+            continue
+        return data
+
+    raise PaymentProviderUnavailableError("mercadopago payment lookup failed")
