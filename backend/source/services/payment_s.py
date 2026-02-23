@@ -98,6 +98,86 @@ def _normalize_optional_str(value: str | None) -> str | None:
     return normalized
 
 
+def _require_normalized_str(value: object, *, field: str, lower: bool = False) -> str:
+    if value is None:
+        raise ValueError(f"missing mercadopago {field}")
+    normalized = str(value).strip()
+    if not normalized:
+        raise ValueError(f"missing mercadopago {field}")
+    if lower:
+        return normalized.lower()
+    return normalized
+
+
+def _to_float_or_none(value: object, *, field: str) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"invalid mercadopago {field}") from None
+
+
+def normalize_mp_payment_state(mp_payment: dict) -> dict:
+    if not isinstance(mp_payment, dict):
+        raise ValueError("invalid mercadopago payment payload")
+
+    provider_payment_id = _require_normalized_str(mp_payment.get("id"), field="id")
+    provider_status = _require_normalized_str(
+        mp_payment.get("status"), field="status", lower=True
+    )
+    external_reference = _require_normalized_str(
+        mp_payment.get("external_reference"),
+        field="external_reference",
+    )
+    internal_status = _map_mercadopago_provider_status(provider_status)
+
+    raw_currency = mp_payment.get("currency_id")
+    currency = None
+    if raw_currency is not None:
+        currency = str(raw_currency).strip().upper() or None
+
+    amount = _to_float_or_none(
+        mp_payment.get("transaction_amount"),
+        field="transaction_amount",
+    )
+    payer = mp_payment.get("payer")
+    payer_data = payer if isinstance(payer, dict) else {}
+    transaction_details = mp_payment.get("transaction_details")
+    normalized_transaction_details = (
+        transaction_details if isinstance(transaction_details, dict) else {}
+    )
+
+    return {
+        "provider_payment_id": provider_payment_id,
+        "provider_status": provider_status,
+        "provider_status_detail": mp_payment.get("status_detail"),
+        "internal_status": internal_status,
+        "external_reference": external_reference,
+        "amount": amount,
+        "currency": currency,
+        "date_created": mp_payment.get("date_created"),
+        "date_approved": mp_payment.get("date_approved"),
+        "date_last_updated": mp_payment.get("date_last_updated"),
+        "payment_method_id": mp_payment.get("payment_method_id"),
+        "payment_type_id": mp_payment.get("payment_type_id"),
+        "payer_id": payer_data.get("id"),
+        "payer_email": payer_data.get("email"),
+        "metadata": (
+            mp_payment.get("metadata")
+            if isinstance(mp_payment.get("metadata"), dict)
+            else {}
+        ),
+        "additional_info": (
+            mp_payment.get("additional_info")
+            if isinstance(mp_payment.get("additional_info"), dict)
+            else {}
+        ),
+        "transaction_details": normalized_transaction_details,
+        "raw": mp_payment,
+    }
+
+
 def _get_checkout_payload(payload: dict | None) -> dict | None:
     if not isinstance(payload, dict):
         return None
@@ -310,17 +390,35 @@ def find_payment_for_mercadopago_event(
         return None
 
 
-def apply_mercadopago_provider_status(
+def apply_mercadopago_normalized_state(
     *,
     payment_id: int,
-    provider_status: str,
-    provider_payload: dict | None = None,
-    receipt_url: str | None = None,
+    normalized_state: dict,
+    notification_payload: dict | None = None,
     db: Session | None = None,
 ) -> dict:
-    internal_status = _map_mercadopago_provider_status(provider_status)
-    normalized_receipt_url = _normalize_optional_str(receipt_url)
+    if not isinstance(normalized_state, dict):
+        raise ValueError("normalized_state is required")
 
+    provider_status = _normalize_optional_str(normalized_state.get("provider_status"))
+    if provider_status is None:
+        raise ValueError("normalized_state.provider_status is required")
+    internal_status = _normalize_optional_str(normalized_state.get("internal_status"))
+    if internal_status is None:
+        raise ValueError("normalized_state.internal_status is required")
+    external_reference = _normalize_optional_str(normalized_state.get("external_reference"))
+    if external_reference is None:
+        raise ValueError("normalized_state.external_reference is required")
+
+    normalized_amount = _to_float_or_none(
+        normalized_state.get("amount"),
+        field="transaction_amount",
+    )
+    normalized_currency = _normalize_optional_str(normalized_state.get("currency"))
+    if normalized_currency is not None:
+        normalized_currency = normalized_currency.upper()
+
+    now = datetime.utcnow()
     with _session_scope(db) as (session, owns_session):
         payment = (
             session.query(Payment)
@@ -329,23 +427,59 @@ def apply_mercadopago_provider_status(
         )
         if payment is None:
             raise LookupError("payment not found")
+        order = payment.order
+        if order is None:
+            raise LookupError("order not found")
+
+        payment_external_ref = _normalize_optional_str(payment.external_ref)
+        if payment_external_ref != external_reference:
+            raise ValueError("external_reference does not match payment")
+
+        if normalized_amount is not None and abs(float(payment.amount) - normalized_amount) > 0.01:
+            raise ValueError("payment amount mismatch")
+        if normalized_currency is not None and payment.currency.strip().upper() != normalized_currency:
+            raise ValueError("payment currency mismatch")
 
         _assert_valid_payment_transition(payment.status, internal_status)
+        payment.provider_status = provider_status
 
-        payment.provider_status = provider_status.strip().lower()
-        if normalized_receipt_url is not None:
-            payment.receipt_url = normalized_receipt_url
-
-        if provider_payload is not None:
-            existing_payload = _deserialize_provider_payload(payment.provider_payload) or {}
-            merged_payload = dict(existing_payload)
-            merged_payload["last_event"] = provider_payload
-            payment.provider_payload = _serialize_provider_payload(merged_payload)
+        existing_payload = _deserialize_provider_payload(payment.provider_payload) or {}
+        merged_payload = dict(existing_payload)
+        if notification_payload is not None:
+            merged_payload["last_event"] = notification_payload
+        merged_payload["payment_lookup"] = normalized_state.get("raw")
+        merged_payload["reconciliation"] = {
+            "provider_payment_id": normalized_state.get("provider_payment_id"),
+            "external_reference": external_reference,
+            "provider_status": provider_status,
+            "provider_status_detail": normalized_state.get("provider_status_detail"),
+            "internal_status": internal_status,
+            "amount_consistent": normalized_amount is None
+            or abs(float(payment.amount) - normalized_amount) <= 0.01,
+            "currency_consistent": normalized_currency is None
+            or payment.currency.strip().upper() == normalized_currency,
+            "date_last_updated": normalized_state.get("date_last_updated"),
+        }
+        payment.provider_payload = _serialize_provider_payload(merged_payload)
 
         if payment.status != internal_status:
             payment.status = internal_status
             if internal_status == "paid" and payment.paid_at is None:
-                payment.paid_at = datetime.utcnow()
+                payment.paid_at = now
+
+        if internal_status == "paid":
+            if order.status not in {"submitted", "paid"}:
+                raise ValueError("order can only be paid from submitted status")
+            if order.status != "paid":
+                order.status = "paid"
+            if order.paid_at is None:
+                order.paid_at = now
+        elif internal_status == "cancelled":
+            if order.status != "paid":
+                if order.status != "cancelled":
+                    order.status = "cancelled"
+                if order.cancelled_at is None:
+                    order.cancelled_at = now
 
         session.flush()
         if owns_session:
