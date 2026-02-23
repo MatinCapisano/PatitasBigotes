@@ -1,16 +1,17 @@
 import logging
+import hashlib
+import hmac
 from datetime import datetime
 from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
-from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from auth.security import decode_access_token
-from source.db.config import get_mercadopago_webhook_token
+from source.db.config import get_mercadopago_webhook_secret
 from source.db.session import get_db
 from source.services.discount_s import (
     create_discount,
@@ -26,12 +27,14 @@ from source.services.orders_s import (
     pay_order,
     remove_item_from_draft_order,
 )
+from source.services.mercadopago_client import get_payment_by_id
 from source.services.payment_s import (
-    apply_mercadopago_provider_status,
+    apply_mercadopago_normalized_state,
     create_payment_for_order,
     find_payment_for_mercadopago_event,
     get_payment_for_user,
     list_payments_for_order,
+    normalize_mp_payment_state,
 )
 from source.services.products_s import (
     filter_and_sort_products,
@@ -70,31 +73,49 @@ def _raise_http_error_from_exception(exc: Exception, db: Session | None = None) 
     raise exc
 
 
-def _extract_mercadopago_event_fields(payload: dict) -> tuple[str | None, str | None, str | None]:
+def _extract_mercadopago_data_id(payload: dict) -> str | None:
     data = payload.get("data")
-    payment_data = payload.get("payment")
-    metadata = payload.get("metadata")
+    if not isinstance(data, dict):
+        return None
+    raw_id = data.get("id")
+    if raw_id is None:
+        return None
+    data_id = str(raw_id).strip()
+    if not data_id:
+        return None
+    return data_id
 
-    preference_id = (
-        payload.get("preference_id")
-        or (data.get("preference_id") if isinstance(data, dict) else None)
-        or (payment_data.get("preference_id") if isinstance(payment_data, dict) else None)
-    )
-    external_ref = (
-        payload.get("external_reference")
-        or payload.get("external_ref")
-        or (data.get("external_reference") if isinstance(data, dict) else None)
-        or (data.get("external_ref") if isinstance(data, dict) else None)
-        or (payment_data.get("external_reference") if isinstance(payment_data, dict) else None)
-        or (payment_data.get("external_ref") if isinstance(payment_data, dict) else None)
-        or (metadata.get("external_ref") if isinstance(metadata, dict) else None)
-    )
-    provider_status = (
-        payload.get("status")
-        or (data.get("status") if isinstance(data, dict) else None)
-        or (payment_data.get("status") if isinstance(payment_data, dict) else None)
-    )
-    return preference_id, external_ref, provider_status
+
+def _parse_mercadopago_signature_header(signature_header: str | None) -> tuple[str | None, str | None]:
+    if signature_header is None:
+        return None, None
+    parsed: dict[str, str] = {}
+    for item in signature_header.split(","):
+        key, _, value = item.strip().partition("=")
+        if not key or not value:
+            continue
+        parsed[key.strip().lower()] = value.strip()
+    return parsed.get("ts"), parsed.get("v1")
+
+
+def _is_mercadopago_signature_valid(
+    *,
+    data_id: str,
+    request_id: str | None,
+    signature_header: str | None,
+) -> bool:
+    normalized_request_id = (request_id or "").strip()
+    ts, v1 = _parse_mercadopago_signature_header(signature_header)
+    if not normalized_request_id or not ts or not v1:
+        return False
+    manifest = f"id:{data_id};request-id:{normalized_request_id};ts:{ts};"
+    secret = get_mercadopago_webhook_secret()
+    expected = hmac.new(
+        key=secret.encode("utf-8"),
+        msg=manifest.encode("utf-8"),
+        digestmod=hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected.lower(), v1.lower())
 
 
 def get_current_user(
@@ -561,76 +582,116 @@ def get_payment(
 @app.post("/payments/webhook/mercadopago")
 def mercadopago_webhook(
     payload: dict,
-    mp_webhook_token: str | None = Header(default=None, alias="X-MP-Webhook-Token"),
+    x_signature: str | None = Header(default=None, alias="x-signature"),
+    x_request_id: str | None = Header(default=None, alias="x-request-id"),
     db: Session = Depends(get_db),
 ):
-    expected_token = get_mercadopago_webhook_token()
-    received_token = (mp_webhook_token or "").strip()
-    if expected_token and received_token != expected_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid webhook token",
-        )
-
     if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="invalid webhook payload")
-
-    preference_id, external_ref, provider_status = _extract_mercadopago_event_fields(payload)
-    if preference_id is None and external_ref is None:
-        logger.info("mercadopago webhook ignored: missing identifiers")
-        return JSONResponse(
-            status_code=status.HTTP_202_ACCEPTED,
-            content={"data": {"processed": False, "reason": "missing identifiers"}},
+        logger.info(
+            "event=mp_webhook_ignored reason=invalid_payload request_id=%s",
+            x_request_id,
         )
+        return {"data": {"processed": False, "reason": "invalid webhook payload"}}
+
+    data_id = _extract_mercadopago_data_id(payload)
+    if data_id is None:
+        logger.info(
+            "event=mp_webhook_ignored reason=missing_data_id request_id=%s",
+            x_request_id,
+        )
+        return {"data": {"processed": False, "reason": "missing data.id"}}
+
+    is_signature_valid = _is_mercadopago_signature_valid(
+        data_id=data_id,
+        request_id=x_request_id,
+        signature_header=x_signature,
+    )
+    if not is_signature_valid:
+        logger.warning(
+            "event=mp_signature_failed request_id=%s data_id=%s",
+            x_request_id,
+            data_id,
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid signature")
+
+    try:
+        mp_payment = get_payment_by_id(data_id)
+    except Exception as exc:
+        logger.error(
+            "event=mp_payment_lookup_failed request_id=%s data_id=%s error=%s",
+            x_request_id,
+            data_id,
+            str(exc),
+        )
+        return {"data": {"processed": False, "reason": "payment lookup failed"}}
+
+    try:
+        normalized_state = normalize_mp_payment_state(mp_payment)
+    except Exception as exc:
+        logger.info(
+            "event=mp_webhook_ignored reason=invalid_mp_payment request_id=%s data_id=%s error=%s",
+            x_request_id,
+            data_id,
+            str(exc),
+        )
+        return {"data": {"processed": False, "reason": "invalid mercadopago payment payload"}}
+
+    external_ref = str(normalized_state["external_reference"])
 
     try:
         payment = find_payment_for_mercadopago_event(
-            preference_id=preference_id,
+            preference_id=None,
             external_ref=external_ref,
             db=db,
         )
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        logger.error(
+            "event=mp_reconciliation_failed request_id=%s data_id=%s external_reference=%s error=%s",
+            x_request_id,
+            data_id,
+            external_ref,
+            str(exc),
+        )
+        return {"data": {"processed": False, "reason": "reconciliation failed"}}
 
     if payment is None:
         logger.info(
-            "mercadopago webhook not matched: preference_id=%s external_ref=%s",
-            preference_id,
+            "event=mp_payment_unmatched request_id=%s data_id=%s external_reference=%s",
+            x_request_id,
+            data_id,
             external_ref,
         )
-        return JSONResponse(
-            status_code=status.HTTP_202_ACCEPTED,
-            content={"data": {"processed": False, "reason": "payment not found"}},
-        )
-
-    if not isinstance(provider_status, str) or not provider_status.strip():
-        logger.info(
-            "mercadopago webhook missing status: payment_id=%s preference_id=%s external_ref=%s",
-            payment["id"],
-            preference_id,
-            external_ref,
-        )
-        return JSONResponse(
-            status_code=status.HTTP_202_ACCEPTED,
-            content={"data": {"processed": False, "reason": "missing provider status"}},
-        )
+        return {"data": {"processed": False, "reason": "payment not found"}}
 
     try:
-        updated_payment = apply_mercadopago_provider_status(
+        updated_payment = apply_mercadopago_normalized_state(
             payment_id=int(payment["id"]),
-            provider_status=provider_status,
-            provider_payload=payload,
+            normalized_state=normalized_state,
+            notification_payload=payload,
             db=db,
         )
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        logger.error(
+            "event=mp_payment_update_failed request_id=%s data_id=%s external_reference=%s payment_id=%s mp_status=%s error=%s",
+            x_request_id,
+            data_id,
+            external_ref,
+            payment["id"],
+            normalized_state.get("provider_status"),
+            str(exc),
+        )
+        return {"data": {"processed": False, "reason": str(exc)}}
 
     logger.info(
-        "mercadopago webhook processed: payment_id=%s preference_id=%s external_ref=%s provider_status=%s",
-        updated_payment["id"],
-        preference_id,
+        "event=mp_webhook_processed request_id=%s data_id=%s external_reference=%s payment_id=%s order_id=%s mp_status=%s mp_status_detail=%s processed=%s",
+        x_request_id,
+        data_id,
         external_ref,
-        provider_status,
+        updated_payment["id"],
+        updated_payment["order_id"],
+        normalized_state.get("provider_status"),
+        normalized_state.get("provider_status_detail"),
+        True,
     )
     return {"data": {"processed": True, "payment": updated_payment}}
 
