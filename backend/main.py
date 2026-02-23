@@ -1,13 +1,16 @@
+import logging
 from datetime import datetime
 from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from auth.security import decode_access_token
+from source.db.config import get_mercadopago_webhook_token
 from source.db.session import get_db
 from source.services.discount_s import (
     create_discount,
@@ -24,7 +27,9 @@ from source.services.orders_s import (
     remove_item_from_draft_order,
 )
 from source.services.payment_s import (
+    apply_mercadopago_provider_status,
     create_payment_for_order,
+    find_payment_for_mercadopago_event,
     get_payment_for_user,
     list_payments_for_order,
 )
@@ -40,6 +45,7 @@ app = FastAPI(
     description="API para página de ventas. Etapa inicial."
 )
 bearer_scheme = HTTPBearer(auto_error=False)
+logger = logging.getLogger(__name__)
 
 
 def _raise_http_error_from_exception(exc: Exception, db: Session | None = None) -> None:
@@ -62,6 +68,33 @@ def _raise_http_error_from_exception(exc: Exception, db: Session | None = None) 
         ) from exc
 
     raise exc
+
+
+def _extract_mercadopago_event_fields(payload: dict) -> tuple[str | None, str | None, str | None]:
+    data = payload.get("data")
+    payment_data = payload.get("payment")
+    metadata = payload.get("metadata")
+
+    preference_id = (
+        payload.get("preference_id")
+        or (data.get("preference_id") if isinstance(data, dict) else None)
+        or (payment_data.get("preference_id") if isinstance(payment_data, dict) else None)
+    )
+    external_ref = (
+        payload.get("external_reference")
+        or payload.get("external_ref")
+        or (data.get("external_reference") if isinstance(data, dict) else None)
+        or (data.get("external_ref") if isinstance(data, dict) else None)
+        or (payment_data.get("external_reference") if isinstance(payment_data, dict) else None)
+        or (payment_data.get("external_ref") if isinstance(payment_data, dict) else None)
+        or (metadata.get("external_ref") if isinstance(metadata, dict) else None)
+    )
+    provider_status = (
+        payload.get("status")
+        or (data.get("status") if isinstance(data, dict) else None)
+        or (payment_data.get("status") if isinstance(payment_data, dict) else None)
+    )
+    return preference_id, external_ref, provider_status
 
 
 def get_current_user(
@@ -523,6 +556,83 @@ def get_payment(
         _raise_http_error_from_exception(exc, db=db)
 
     return {"data": payment}
+
+
+@app.post("/payments/webhook/mercadopago")
+def mercadopago_webhook(
+    payload: dict,
+    mp_webhook_token: str | None = Header(default=None, alias="X-MP-Webhook-Token"),
+    db: Session = Depends(get_db),
+):
+    expected_token = get_mercadopago_webhook_token()
+    received_token = (mp_webhook_token or "").strip()
+    if expected_token and received_token != expected_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid webhook token",
+        )
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="invalid webhook payload")
+
+    preference_id, external_ref, provider_status = _extract_mercadopago_event_fields(payload)
+    if preference_id is None and external_ref is None:
+        logger.info("mercadopago webhook ignored: missing identifiers")
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={"data": {"processed": False, "reason": "missing identifiers"}},
+        )
+
+    try:
+        payment = find_payment_for_mercadopago_event(
+            preference_id=preference_id,
+            external_ref=external_ref,
+            db=db,
+        )
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
+
+    if payment is None:
+        logger.info(
+            "mercadopago webhook not matched: preference_id=%s external_ref=%s",
+            preference_id,
+            external_ref,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={"data": {"processed": False, "reason": "payment not found"}},
+        )
+
+    if not isinstance(provider_status, str) or not provider_status.strip():
+        logger.info(
+            "mercadopago webhook missing status: payment_id=%s preference_id=%s external_ref=%s",
+            payment["id"],
+            preference_id,
+            external_ref,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={"data": {"processed": False, "reason": "missing provider status"}},
+        )
+
+    try:
+        updated_payment = apply_mercadopago_provider_status(
+            payment_id=int(payment["id"]),
+            provider_status=provider_status,
+            provider_payload=payload,
+            db=db,
+        )
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
+
+    logger.info(
+        "mercadopago webhook processed: payment_id=%s preference_id=%s external_ref=%s provider_status=%s",
+        updated_payment["id"],
+        preference_id,
+        external_ref,
+        provider_status,
+    )
+    return {"data": {"processed": True, "payment": updated_payment}}
 
 
 # -------------------------

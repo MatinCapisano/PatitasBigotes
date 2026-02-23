@@ -64,3 +64,7 @@ def get_mercadopago_notification_url() -> str:
         "MERCADOPAGO_NOTIFICATION_URL",
         "http://localhost:8000/payments/webhook/mercadopago",
     ).strip()
+
+
+def get_mercadopago_webhook_token() -> str:
+    return os.getenv("MERCADOPAGO_WEBHOOK_TOKEN", "").strip()
