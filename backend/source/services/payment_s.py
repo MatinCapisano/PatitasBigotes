@@ -20,6 +20,24 @@ from source.db.session import SessionLocal
 from source.services.mercadopago_client import create_checkout_preference
 
 ALLOWED_PAYMENT_METHODS = {"bank_transfer", "mercadopago"}
+MERCADOPAGO_PROVIDER_TO_INTERNAL_STATUS = {
+    "approved": "paid",
+    "accredited": "paid",
+    "pending": "pending",
+    "in_process": "pending",
+    "in_mediation": "pending",
+    "authorized": "pending",
+    "rejected": "cancelled",
+    "cancelled": "cancelled",
+    "canceled": "cancelled",
+    "expired": "expired",
+}
+ALLOWED_PAYMENT_TRANSITIONS = {
+    "pending": {"pending", "paid", "cancelled", "expired"},
+    "paid": {"paid"},
+    "cancelled": {"cancelled"},
+    "expired": {"expired"},
+}
 
 
 @contextmanager
@@ -71,14 +89,61 @@ def _deserialize_provider_payload(payload: str | None) -> dict | None:
     return parsed
 
 
-def _has_checkout_preference(payload: dict | None) -> bool:
+def _normalize_optional_str(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    return normalized
+
+
+def _get_checkout_payload(payload: dict | None) -> dict | None:
     if not isinstance(payload, dict):
-        return False
+        return None
     checkout = payload.get("checkout")
     if not isinstance(checkout, dict):
-        return False
-    preference_id = checkout.get("preference_id")
-    return isinstance(preference_id, str) and bool(preference_id.strip())
+        return None
+    return checkout
+
+
+def _get_checkout_preference_id(payload: dict | None) -> str | None:
+    checkout = _get_checkout_payload(payload)
+    if checkout is None:
+        return None
+    return _normalize_optional_str(checkout.get("preference_id"))
+
+
+def _get_checkout_external_ref(payload: dict | None) -> str | None:
+    checkout = _get_checkout_payload(payload)
+    if checkout is None:
+        return None
+    return _normalize_optional_str(checkout.get("external_ref"))
+
+
+def _has_checkout_preference(payload: dict | None) -> bool:
+    return _get_checkout_preference_id(payload) is not None
+
+
+def _map_mercadopago_provider_status(provider_status: str) -> str:
+    normalized_status = provider_status.strip().lower()
+    if not normalized_status:
+        raise ValueError("provider_status is required")
+    mapped = MERCADOPAGO_PROVIDER_TO_INTERNAL_STATUS.get(normalized_status)
+    if mapped is None:
+        raise ValueError("unsupported mercadopago provider_status")
+    return mapped
+
+
+def _assert_valid_payment_transition(current_status: str, next_status: str) -> None:
+    allowed = ALLOWED_PAYMENT_TRANSITIONS.get(current_status, {current_status})
+    if next_status not in allowed:
+        raise ValueError("invalid payment status transition")
+
+
+def _payment_has_preference_id(payment: Payment, preference_id: str) -> bool:
+    payload = _deserialize_provider_payload(payment.provider_payload)
+    return _get_checkout_preference_id(payload) == preference_id
 
 
 def _find_active_pending_payment(
@@ -201,6 +266,95 @@ def _build_mercadopago_payload(
         }
     }
     return external_ref, payload
+
+
+def find_payment_for_mercadopago_event(
+    *,
+    preference_id: str | None,
+    external_ref: str | None,
+    db: Session | None = None,
+) -> dict | None:
+    normalized_preference_id = _normalize_optional_str(preference_id)
+    normalized_external_ref = _normalize_optional_str(external_ref)
+    if normalized_preference_id is None and normalized_external_ref is None:
+        raise ValueError("preference_id or external_ref is required")
+
+    with _session_scope(db) as (session, _):
+        if normalized_preference_id is not None:
+            candidates = (
+                session.query(Payment)
+                .filter(
+                    Payment.method == "mercadopago",
+                    Payment.provider_payload.isnot(None),
+                )
+                .order_by(Payment.created_at.desc(), Payment.id.desc())
+                .all()
+            )
+            for candidate in candidates:
+                if _payment_has_preference_id(candidate, normalized_preference_id):
+                    return _payment_to_dict(candidate)
+
+        if normalized_external_ref is not None:
+            payment = (
+                session.query(Payment)
+                .filter(
+                    Payment.method == "mercadopago",
+                    Payment.external_ref == normalized_external_ref,
+                )
+                .order_by(Payment.created_at.desc(), Payment.id.desc())
+                .first()
+            )
+            if payment is not None:
+                return _payment_to_dict(payment)
+
+        return None
+
+
+def apply_mercadopago_provider_status(
+    *,
+    payment_id: int,
+    provider_status: str,
+    provider_payload: dict | None = None,
+    receipt_url: str | None = None,
+    db: Session | None = None,
+) -> dict:
+    internal_status = _map_mercadopago_provider_status(provider_status)
+    normalized_receipt_url = _normalize_optional_str(receipt_url)
+
+    with _session_scope(db) as (session, owns_session):
+        payment = (
+            session.query(Payment)
+            .filter(Payment.id == payment_id, Payment.method == "mercadopago")
+            .first()
+        )
+        if payment is None:
+            raise LookupError("payment not found")
+
+        _assert_valid_payment_transition(payment.status, internal_status)
+
+        payment.provider_status = provider_status.strip().lower()
+        if normalized_receipt_url is not None:
+            payment.receipt_url = normalized_receipt_url
+
+        if provider_payload is not None:
+            existing_payload = _deserialize_provider_payload(payment.provider_payload) or {}
+            merged_payload = dict(existing_payload)
+            merged_payload["last_event"] = provider_payload
+            payment.provider_payload = _serialize_provider_payload(merged_payload)
+
+        if payment.status != internal_status:
+            payment.status = internal_status
+            if internal_status == "paid" and payment.paid_at is None:
+                payment.paid_at = datetime.utcnow()
+
+        session.flush()
+        if owns_session:
+            session.commit()
+        else:
+            session.flush()
+
+        session.refresh(payment)
+        return _payment_to_dict(payment)
 
 
 def create_payment_for_order(
@@ -341,6 +495,11 @@ def create_payment_for_order(
                 payment.provider_payload
             )
             if _has_checkout_preference(existing_provider_payload):
+                checkout_external_ref = _get_checkout_external_ref(
+                    existing_provider_payload
+                )
+                if checkout_external_ref is not None and payment.external_ref is None:
+                    payment.external_ref = checkout_external_ref
                 payment.provider_status = payment.provider_status or "preference_created"
             else:
                 external_ref, provider_payload = _build_mercadopago_payload(
