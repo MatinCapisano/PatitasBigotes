@@ -1,10 +1,8 @@
 import logging
-from datetime import datetime
 from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from auth.auth_s import (
@@ -27,6 +25,20 @@ from source.dependencies.mercadopago_d import (
 from source.db.models import User
 from source.db.session import get_db
 from source.errors import raise_http_error_from_exception
+from source.schemas import (
+    AddOrderItemRequest,
+    CreateDiscountRequest,
+    CreateOrderPaymentRequest,
+    CreateProductRequest,
+    CreateTurnRequest,
+    CreateUserRequest,
+    LoginRequest,
+    PatchProductRequest,
+    PayOrderRequest,
+    UpdateProductRequest,
+    UpdateDiscountRequest,
+    UpdateOrderStatusRequest,
+)
 from source.services.discount_s import (
     create_discount,
     delete_discount,
@@ -51,10 +63,14 @@ from source.services.payment_s import (
     normalize_mp_payment_state,
 )
 from source.services.products_s import (
+    create_product as create_product_s,
+    delete_product_hard,
     filter_and_sort_products,
     get_product_by_id,
     get_variant_by_id,
+    update_product as update_product_s,
 )
+from source.services.turns_s import create_turn_for_user
 
 app = FastAPI(
     title="Sales API",
@@ -62,73 +78,6 @@ app = FastAPI(
     description="API para página de ventas. Etapa inicial."
 )
 logger = logging.getLogger(__name__)
-
-
-class AddOrderItemRequest(BaseModel):
-    variant_id: int
-    quantity: int = Field(gt=0)
-
-
-class UpdateOrderStatusRequest(BaseModel):
-    status: Literal["draft", "submitted", "paid", "cancelled"]
-
-
-class CreateUserRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    first_name: str
-    last_name: str
-    email: EmailStr
-    password: str
-
-
-class LoginRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    email: EmailStr
-    password: str
-
-
-class UpdateDiscountRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    name: str | None = None
-    type: Literal["percent", "fixed"] | None = None
-    value: float | None = Field(default=None, gt=0)
-    scope: Literal["all", "category", "product", "product_list"] | None = None
-    scope_value: str | None = None
-    is_active: bool | None = None
-    starts_at: datetime | None = None
-    ends_at: datetime | None = None
-    product_ids: list[int] | None = None
-
-
-class CreateDiscountRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    name: str
-    type: Literal["percent", "fixed"]
-    value: float = Field(gt=0)
-    scope: Literal["all", "category", "product", "product_list"]
-    scope_value: str | None = None
-    is_active: bool = True
-    starts_at: datetime | None = None
-    ends_at: datetime | None = None
-    product_ids: list[int] = Field(default_factory=list)
-
-
-class PayOrderRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    payment_ref: str
-    paid_amount: float = Field(gt=0)
-
-
-class CreateOrderPaymentRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    method: Literal["bank_transfer", "mercadopago"]
-    currency: str | None = Field(
-        default=None,
-        min_length=3,
-        max_length=3,
-        pattern=r"^[A-Z]{3}$",
-    )
-    expires_in_minutes: int = Field(default=60, gt=0, le=1440)
 
 
 @app.get("/health")
@@ -140,11 +89,6 @@ def health_check():
 # PRODUCTS
 # -------------------------
 
-PRODUCTS = [
-    {"id": 1, "name": "Laptop", "price": 1200, "category": "electronics"},
-    {"id": 2, "name": "Mouse", "price": 25, "category": "electronics"},
-    {"id": 3, "name": "Chair", "price": 80, "category": "furniture"},
-]
 
 @app.get("/products")
 def get_products(
@@ -196,57 +140,73 @@ def get_product(
 
 @app.post("/products")
 def create_product(
+    payload: CreateProductRequest,
     _: dict = Depends(require_admin),
-    _db: Session = Depends(get_db),
+    db: Session = Depends(get_db),
 ):
-    return {
-        "data": {
-            "id": 1,
-            "status": "created"
-        }
-    }
+    try:
+        product = create_product_s(payload=payload.model_dump(), db=db)
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+    return {"data": product}
 
 
 @app.put("/products/{product_id}")
 def update_product(
     product_id: int,
+    payload: UpdateProductRequest,
     _: dict = Depends(require_admin),
-    _db: Session = Depends(get_db),
+    db: Session = Depends(get_db),
 ):
-    return {
-        "data": {
-            "id": product_id,
-            "status": "updated"
-        }
-    }
+    try:
+        product = update_product_s(
+            product_id=product_id,
+            updates=payload.model_dump(),
+            db=db,
+        )
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return {"data": product}
 
 
 @app.patch("/products/{product_id}")
 def patch_product(
     product_id: int,
+    payload: PatchProductRequest,
     _: dict = Depends(require_admin),
-    _db: Session = Depends(get_db),
+    db: Session = Depends(get_db),
 ):
-    return {
-        "data": {
-            "id": product_id,
-            "status": "patched"
-        }
-    }
+    updates = payload.model_dump(exclude_none=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="at least one field is required")
+    try:
+        product = update_product_s(
+            product_id=product_id,
+            updates=updates,
+            db=db,
+        )
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return {"data": product}
 
 
 @app.delete("/products/{product_id}")
 def delete_product(
     product_id: int,
     _: dict = Depends(require_admin),
-    _db: Session = Depends(get_db),
+    db: Session = Depends(get_db),
 ):
-    return {
-        "data": {
-            "id": product_id,
-            "status": "deleted"
-        }
-    }
+    try:
+        product = delete_product_hard(product_id=product_id, db=db)
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return {"data": product}
 
 
 # -------------------------
@@ -742,12 +702,18 @@ def remove_discount(
 
 @app.post("/turns")
 def create_turn(
-    _: dict = Depends(require_admin),
-    _db: Session = Depends(get_db),
+    payload: CreateTurnRequest,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    return {
-        "data": {
-            "id": 1,
-            "status": "created"
-        }
-    }
+    user_id = get_current_user_id(current_user)
+    try:
+        turn = create_turn_for_user(
+            user_id=user_id,
+            scheduled_at=payload.scheduled_at,
+            notes=payload.notes,
+            db=db,
+        )
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+    return {"data": turn}

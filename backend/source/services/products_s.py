@@ -168,6 +168,83 @@ def update_product(product_id: int, updates: dict, db: Session | None = None) ->
         return _product_to_dict(product)
 
 
+def create_product(payload: dict, db: Session | None = None) -> dict:
+    name = str(payload.get("name", "")).strip()
+    if not name:
+        raise ValueError("name is required")
+
+    raw_price = payload.get("price")
+    if raw_price is None:
+        raise ValueError("price is required")
+    price = float(raw_price)
+    if price <= 0:
+        raise ValueError("price must be greater than 0")
+
+    category_name = str(payload.get("category", "")).strip()
+    if not category_name:
+        raise ValueError("category is required")
+
+    stock = int(payload.get("stock", 0))
+    if stock < 0:
+        raise ValueError("stock must be greater than or equal to 0")
+
+    active = bool(payload.get("active", True))
+    description = payload.get("description")
+    normalized_description = None if description is None else str(description).strip() or None
+    size = payload.get("size")
+    color = payload.get("color")
+
+    with _session_scope(db) as (session, owns_session):
+        category = session.query(Category).filter(Category.name == category_name).first()
+        if category is None:
+            raise ValueError("category not found")
+
+        product = Product(
+            name=name,
+            description=normalized_description,
+            price=price,
+            category_id=category.id,
+        )
+        session.add(product)
+        session.flush()
+
+        variant = ProductVariant(
+            product_id=product.id,
+            sku=_build_default_sku(session=session, product_id=product.id),
+            size=None if size is None else str(size).strip() or None,
+            color=None if color is None else str(color).strip() or None,
+            price=price,
+            stock=stock,
+            is_active=active,
+        )
+        session.add(variant)
+
+        session.flush()
+        if owns_session:
+            session.commit()
+        session.refresh(product)
+        return _product_to_dict(product)
+
+
+def delete_product_hard(product_id: int, db: Session | None = None) -> dict | None:
+    with _session_scope(db) as (session, owns_session):
+        product = (
+            session.query(Product)
+            .options(joinedload(Product.category), joinedload(Product.variants))
+            .filter(Product.id == product_id)
+            .first()
+        )
+        if product is None:
+            return None
+
+        product_data = _product_to_dict(product)
+        session.delete(product)
+        session.flush()
+        if owns_session:
+            session.commit()
+        return product_data
+
+
 def deactivate_product(product_id: int, db: Session | None = None) -> dict | None:
     return update_product(product_id=product_id, updates={"active": 0}, db=db)
 
