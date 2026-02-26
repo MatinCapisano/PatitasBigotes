@@ -1,13 +1,10 @@
 import logging
-import hashlib
-import hmac
 from datetime import datetime
 from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from auth.auth_s import (
@@ -16,10 +13,20 @@ from auth.auth_s import (
     logout_with_refresh_token,
     refresh_with_token,
 )
-from auth.security import decode_access_token, hash_password, parsear_sub_a_user_id
-from source.db.config import get_mercadopago_webhook_secret
+from auth.security import hash_password
+from source.dependencies.auth_d import (
+    bearer_scheme,
+    get_current_user,
+    get_current_user_id,
+    require_admin,
+)
+from source.dependencies.mercadopago_d import (
+    _extract_mercadopago_data_id,
+    _is_mercadopago_signature_valid,
+)
 from source.db.models import User
 from source.db.session import get_db
+from source.errors import raise_http_error_from_exception
 from source.services.discount_s import (
     create_discount,
     delete_discount,
@@ -54,121 +61,7 @@ app = FastAPI(
     version="0.1.0",
     description="API para página de ventas. Etapa inicial."
 )
-bearer_scheme = HTTPBearer(auto_error=False)
 logger = logging.getLogger(__name__)
-
-
-def _raise_http_error_from_exception(exc: Exception, db: Session | None = None) -> None:
-    if db is not None and isinstance(exc, (IntegrityError, SQLAlchemyError)):
-        db.rollback()
-
-    if isinstance(exc, LookupError):
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    if isinstance(exc, ValueError):
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if isinstance(exc, IntegrityError):
-        raise HTTPException(
-            status_code=409,
-            detail="database constraint violation",
-        ) from exc
-    if isinstance(exc, SQLAlchemyError):
-        raise HTTPException(
-            status_code=500,
-            detail="database error",
-        ) from exc
-
-    raise exc
-
-
-def _extract_mercadopago_data_id(payload: dict) -> str | None:
-    data = payload.get("data")
-    if not isinstance(data, dict):
-        return None
-    raw_id = data.get("id")
-    if raw_id is None:
-        return None
-    data_id = str(raw_id).strip()
-    if not data_id:
-        return None
-    return data_id
-
-
-def _parse_mercadopago_signature_header(signature_header: str | None) -> tuple[str | None, str | None]:
-    if signature_header is None:
-        return None, None
-    parsed: dict[str, str] = {}
-    for item in signature_header.split(","):
-        key, _, value = item.strip().partition("=")
-        if not key or not value:
-            continue
-        parsed[key.strip().lower()] = value.strip()
-    return parsed.get("ts"), parsed.get("v1")
-
-
-def _is_mercadopago_signature_valid(
-    *,
-    data_id: str,
-    request_id: str | None,
-    signature_header: str | None,
-) -> bool:
-    normalized_request_id = (request_id or "").strip()
-    ts, v1 = _parse_mercadopago_signature_header(signature_header)
-    if not normalized_request_id or not ts or not v1:
-        return False
-    manifest = f"id:{data_id};request-id:{normalized_request_id};ts:{ts};"
-    secret = get_mercadopago_webhook_secret()
-    expected = hmac.new(
-        key=secret.encode("utf-8"),
-        msg=manifest.encode("utf-8"),
-        digestmod=hashlib.sha256,
-    ).hexdigest()
-    return hmac.compare_digest(expected.lower(), v1.lower())
-
-
-def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-) -> dict:
-    if credentials is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing bearer token",
-        )
-
-    try:
-        payload = decode_access_token(credentials.credentials)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-        ) from exc
-
-    if not payload.get("sub"):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token payload is missing subject",
-        )
-
-    return payload
-
-
-def get_current_user_id(current_user: dict) -> int:
-    try:
-        return parsear_sub_a_user_id(current_user.get("sub"))
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token subject",
-        ) from exc
-
-
-def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
-    if not current_user.get("is_admin", False):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin permissions required",
-        )
-
-    return current_user
 
 
 class AddOrderItemRequest(BaseModel):
@@ -388,7 +281,7 @@ def create_user(
         db.commit()
         db.refresh(user)
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        raise_http_error_from_exception(exc, db=db)
 
     return {
         "data": {
@@ -420,7 +313,7 @@ def login(
         )
         tokens = issue_token_pair(user=user, db=db)
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        raise_http_error_from_exception(exc, db=db)
     return {"data": tokens}
 
 
@@ -437,7 +330,7 @@ def refresh(
     try:
         tokens = refresh_with_token(refresh_token=credentials.credentials, db=db)
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        raise_http_error_from_exception(exc, db=db)
     return {"data": tokens}
 
 
@@ -454,7 +347,7 @@ def logout(
     try:
         logout_with_refresh_token(refresh_token=credentials.credentials, db=db)
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        raise_http_error_from_exception(exc, db=db)
     return {"data": {"logged_out": True}}
 
 
@@ -471,7 +364,7 @@ def get_or_create_draft(
     try:
         order, created = get_or_create_draft_order(user_ref)
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        raise_http_error_from_exception(exc, db=db)
     return {
         "data": order,
         "meta": {
@@ -498,7 +391,7 @@ def add_item_to_draft(
             quantity=payload.quantity,
         )
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        raise_http_error_from_exception(exc, db=db)
 
     return {"data": order}
 
@@ -513,7 +406,7 @@ def remove_item_from_draft(
     try:
         order = remove_item_from_draft_order(user_ref=user_ref, item_id=item_id)
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        raise_http_error_from_exception(exc, db=db)
 
     if order is None:
         raise HTTPException(status_code=404, detail="Draft order item not found")
@@ -545,7 +438,7 @@ def update_order_status(
             new_status=payload.status,
         )
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        raise_http_error_from_exception(exc, db=db)
 
     return {"data": order}
 
@@ -560,7 +453,7 @@ def get_order(
     try:
         order = get_order_for_user(user_ref=user_ref, order_id=order_id)
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        raise_http_error_from_exception(exc, db=db)
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found")
     return {"data": order}
@@ -586,7 +479,7 @@ def pay_order_endpoint(
             paid_amount=payload.paid_amount,
         )
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        raise_http_error_from_exception(exc, db=db)
 
     return {"data": order}
 
@@ -618,7 +511,7 @@ def create_order_payment(
             expires_in_minutes=payload.expires_in_minutes,
         )
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        raise_http_error_from_exception(exc, db=db)
 
     return {"data": payment}
 
@@ -638,7 +531,7 @@ def list_order_payments(
             db=db,
         )
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        raise_http_error_from_exception(exc, db=db)
 
     return {"data": payments}
 
@@ -658,7 +551,7 @@ def get_payment(
             db=db,
         )
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        raise_http_error_from_exception(exc, db=db)
 
     return {"data": payment}
 
@@ -792,7 +685,7 @@ def get_discounts(
     try:
         return {"data": list_discounts()}
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        raise_http_error_from_exception(exc, db=db)
 
 
 @app.post("/discounts", status_code=status.HTTP_201_CREATED)
@@ -804,7 +697,7 @@ def post_discount(
     try:
         discount = create_discount(payload.model_dump())
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        raise_http_error_from_exception(exc, db=db)
 
     return {"data": discount}
 
@@ -820,7 +713,7 @@ def patch_discount(
     try:
         discount = update_discount(discount_id=discount_id, updates=updates)
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        raise_http_error_from_exception(exc, db=db)
 
     if discount is None:
         raise HTTPException(status_code=404, detail="discount not found")
@@ -837,7 +730,7 @@ def remove_discount(
     try:
         discount = delete_discount(discount_id=discount_id)
     except Exception as exc:
-        _raise_http_error_from_exception(exc, db=db)
+        raise_http_error_from_exception(exc, db=db)
     if discount is None:
         raise HTTPException(status_code=404, detail="discount not found")
     return {"data": discount}
