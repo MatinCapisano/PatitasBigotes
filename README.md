@@ -77,20 +77,3 @@ Despues de guardar la URL, verifica si Mercado Pago muestra un `webhook secret` 
 2. Pagar con comprador de prueba.
 3. Confirmar que el webhook llega a `POST /payments/webhook/mercadopago`.
 4. Confirmar que el estado interno se actualiza (`pending` -> `paid` u otro estado esperado).
-
-### Troubleshooting
-
-- No llegan webhooks:
-  - URL vieja en panel MP.
-  - Tunnel ngrok cerrado o caido.
-  - `MERCADOPAGO_NOTIFICATION_URL` no coincide con la URL publicada.
-- Respuesta `401` en webhook:
-  - `MERCADOPAGO_WEBHOOK_SECRET` incorrecto.
-  - Se actualizo configuracion en MP y no se reviso si el secret cambio.
-- URL `localhost` en panel MP:
-  - Mercado Pago no puede alcanzar tu maquina desde internet.
-
-### Nota para recruiters
-
-- Para ver funcionalidades generales sin configurar Mercado Pago, usar flujo de pago no real (si el proyecto lo ofrece).
-- Para validar pagos reales sandbox con Mercado Pago, es obligatorio completar el setup de credenciales, cuentas de prueba y webhook descrito arriba.
