@@ -76,6 +76,7 @@ class User(Base):
 
     email = Column(String, nullable=False, unique=True, index=True)
     phone = Column(String, nullable=True)
+    password_hash = Column(String, nullable=False)
 
     is_admin = Column(Boolean, default=False, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -84,6 +85,12 @@ class User(Base):
 
     orders = relationship("Order", back_populates="user")
     turns = relationship("Turn", back_populates="user")
+    refresh_session = relationship(
+        "UserRefreshSession",
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
 
 class Turn(Base):
@@ -284,3 +291,33 @@ class DiscountProduct(Base):
 
     discount = relationship("Discount", back_populates="product_links")
     product = relationship("Product", back_populates="discount_links")
+
+
+class UserRefreshSession(Base):
+    __tablename__ = "user_refresh_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    token_hash = Column(String, nullable=False)
+    token_jti = Column(String, nullable=False, index=True)
+    claim_sub = Column(String, nullable=False)
+    claim_type = Column(String, nullable=False)
+    claim_iss = Column(String, nullable=False)
+    claim_iat = Column(DateTime, nullable=False)
+    claim_exp = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    user = relationship("User", back_populates="refresh_session")
