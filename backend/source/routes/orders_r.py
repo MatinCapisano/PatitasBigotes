@@ -19,7 +19,6 @@ from source.services.orders_s import (
     remove_item_from_draft_order,
 )
 from source.services.payment_s import create_payment_for_order, list_payments_for_order
-from source.services.products_s import get_variant_by_id
 
 router = APIRouter()
 
@@ -29,9 +28,9 @@ def get_or_create_draft(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user_ref = str(current_user["sub"])
+    user_id = get_current_user_id(current_user)
     try:
-        order, created = get_or_create_draft_order(user_ref)
+        order, created = get_or_create_draft_order(user_id=user_id, db=db)
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
     return {
@@ -48,16 +47,13 @@ def add_item_to_draft(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user_ref = str(current_user["sub"])
-    variant = get_variant_by_id(payload.variant_id)
-    if variant is None:
-        raise HTTPException(status_code=404, detail="Variant not found")
-
+    user_id = get_current_user_id(current_user)
     try:
         order = add_item_to_draft_order(
-            user_ref=user_ref,
-            variant=variant,
+            user_id=user_id,
+            variant_id=payload.variant_id,
             quantity=payload.quantity,
+            db=db,
         )
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
@@ -71,9 +67,9 @@ def remove_item_from_draft(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user_ref = str(current_user["sub"])
+    user_id = get_current_user_id(current_user)
     try:
-        order = remove_item_from_draft_order(user_ref=user_ref, item_id=item_id)
+        order = remove_item_from_draft_order(user_id=user_id, item_id=item_id, db=db)
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
 
@@ -90,21 +86,13 @@ def update_order_status(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user_ref = str(current_user["sub"])
-    current_order = get_order_for_user(user_ref=user_ref, order_id=order_id)
-    if current_order is None:
-        raise HTTPException(status_code=404, detail="Order not found")
-    if current_order["status"] != "draft":
-        raise HTTPException(
-            status_code=400,
-            detail="Order can only be modified in draft status",
-        )
-
+    user_id = get_current_user_id(current_user)
     try:
         order = change_order_status(
-            user_ref=user_ref,
+            user_id=user_id,
             order_id=order_id,
             new_status=payload.status,
+            db=db,
         )
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
@@ -118,9 +106,9 @@ def get_order(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user_ref = str(current_user["sub"])
+    user_id = get_current_user_id(current_user)
     try:
-        order = get_order_for_user(user_ref=user_ref, order_id=order_id)
+        order = get_order_for_user(user_id=user_id, order_id=order_id, db=db)
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
     if order is None:
@@ -135,17 +123,14 @@ def pay_order_endpoint(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    payment_ref = payload.payment_ref.strip()
-    if not payment_ref:
-        raise HTTPException(status_code=400, detail="payment_ref is required")
-
-    user_ref = str(current_user["sub"])
+    user_id = get_current_user_id(current_user)
     try:
         order = pay_order(
-            user_ref=user_ref,
+            user_id=user_id,
             order_id=order_id,
-            payment_ref=payment_ref,
+            payment_ref=payload.payment_ref,
             paid_amount=payload.paid_amount,
+            db=db,
         )
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
@@ -162,12 +147,6 @@ def create_order_payment(
     db: Session = Depends(get_db),
 ):
     user_id = get_current_user_id(current_user)
-    normalized_idempotency_key = idempotency_key.strip()
-    if not normalized_idempotency_key:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Idempotency-Key header is required",
-        )
 
     try:
         payment = create_payment_for_order(
@@ -175,7 +154,7 @@ def create_order_payment(
             method=payload.method,
             db=db,
             user_id=user_id,
-            idempotency_key=normalized_idempotency_key,
+            idempotency_key=idempotency_key,
             currency=payload.currency,
             expires_in_minutes=payload.expires_in_minutes,
         )

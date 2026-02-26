@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timedelta
+import hashlib
 import json
 
 from sqlalchemy import or_
@@ -15,7 +16,7 @@ from source.db.config import (
     get_mercadopago_pending_url,
     get_mercadopago_success_url,
 )
-from source.db.models import Order, Payment
+from source.db.models import Order, OrderItem, Payment, ProductVariant
 from source.db.session import SessionLocal
 from source.services.mercadopago_client import create_checkout_preference
 
@@ -654,6 +655,150 @@ def create_payment_for_order(
         else:
             session.flush()
 
+        session.refresh(payment)
+        return _payment_to_dict(payment)
+
+
+def _build_manual_payment_idempotency_key(order_id: int, payment_ref: str) -> str:
+    digest = hashlib.sha256(payment_ref.encode("utf-8")).hexdigest()[:16]
+    return f"manual-order-{order_id}-{digest}"
+
+
+def confirm_manual_payment_for_order(
+    *,
+    order_id: int,
+    user_id: int,
+    payment_ref: str,
+    paid_amount: float,
+    db: Session | None = None,
+) -> dict:
+    normalized_ref = payment_ref.strip()
+    if not normalized_ref:
+        raise ValueError("payment_ref is required")
+    if paid_amount <= 0:
+        raise ValueError("paid_amount must be greater than 0")
+
+    with _session_scope(db) as (session, owns_session):
+        order = (
+            session.query(Order)
+            .options(
+                joinedload(Order.items).joinedload(OrderItem.variant),
+                joinedload(Order.payments),
+            )
+            .filter(Order.id == order_id)
+            .with_for_update()
+            .first()
+        )
+        if order is None or int(order.user_id) != int(user_id):
+            raise LookupError("order not found")
+
+        if order.status == "cancelled":
+            raise ValueError("cannot pay a cancelled order")
+        if order.status not in {"submitted", "paid"}:
+            raise ValueError("order can only be paid from submitted status")
+        if not order.items:
+            raise ValueError("cannot pay an empty order")
+
+        expected_total = round(float(order.total_amount or 0.0), 2)
+        received_total = round(float(paid_amount), 2)
+        if expected_total != received_total:
+            raise ValueError("paid_amount does not match order total")
+
+        existing_paid_by_ref = (
+            session.query(Payment)
+            .filter(
+                Payment.order_id == order.id,
+                Payment.status == "paid",
+                Payment.external_ref == normalized_ref,
+            )
+            .order_by(Payment.created_at.desc(), Payment.id.desc())
+            .first()
+        )
+        if order.status == "paid":
+            if existing_paid_by_ref is not None and round(float(existing_paid_by_ref.amount), 2) == received_total:
+                return _payment_to_dict(existing_paid_by_ref)
+            raise ValueError("order already paid with a different payment_ref")
+
+        for item in order.items:
+            variant = item.variant
+            if variant is None:
+                variant = (
+                    session.query(ProductVariant)
+                    .filter(
+                        ProductVariant.id == item.variant_id,
+                        ProductVariant.is_active.is_(True),
+                    )
+                    .with_for_update()
+                    .first()
+                )
+                if variant is None:
+                    raise ValueError(f"variant {item.variant_id} not found")
+            elif not bool(variant.is_active):
+                raise ValueError(f"variant {item.variant_id} not found")
+
+            current_stock = int(variant.stock or 0)
+            if current_stock < int(item.quantity):
+                raise ValueError(f"insufficient stock for variant {item.variant_id}")
+
+        for item in order.items:
+            variant = (
+                session.query(ProductVariant)
+                .filter(
+                    ProductVariant.id == item.variant_id,
+                    ProductVariant.is_active.is_(True),
+                )
+                .with_for_update()
+                .first()
+            )
+            if variant is None:
+                raise ValueError(f"variant {item.variant_id} not found")
+            variant.stock = int(variant.stock) - int(item.quantity)
+
+        now = datetime.utcnow()
+        payment = existing_paid_by_ref
+        if payment is None:
+            payment = Payment(
+                order_id=order.id,
+                method="bank_transfer",
+                status="paid",
+                amount=received_total,
+                currency=order.currency or "ARS",
+                idempotency_key=_build_manual_payment_idempotency_key(order.id, normalized_ref),
+                external_ref=normalized_ref,
+                provider_status="manual_confirmed",
+                provider_payload=None,
+                receipt_url=None,
+                expires_at=None,
+                paid_at=now,
+            )
+            session.add(payment)
+        else:
+            payment.method = payment.method or "bank_transfer"
+            payment.status = "paid"
+            payment.amount = received_total
+            payment.currency = order.currency or payment.currency or "ARS"
+            payment.external_ref = normalized_ref
+            payment.provider_status = "manual_confirmed"
+            payment.paid_at = now
+
+        payment.provider_payload = _serialize_provider_payload(
+            {
+                "manual_confirmation": {
+                    "payment_ref": normalized_ref,
+                    "confirmed_at": now.isoformat() + "Z",
+                }
+            }
+        )
+
+        order.status = "paid"
+        if order.paid_at is None:
+            order.paid_at = now
+
+        session.flush()
+        if owns_session:
+            session.commit()
+        else:
+            session.flush()
         session.refresh(payment)
         return _payment_to_dict(payment)
 
