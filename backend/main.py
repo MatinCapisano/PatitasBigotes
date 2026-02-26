@@ -10,8 +10,15 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from auth.security import decode_access_token
+from auth.auth_s import (
+    authenticate_user,
+    issue_token_pair,
+    logout_with_refresh_token,
+    refresh_with_token,
+)
+from auth.security import decode_access_token, hash_password, parsear_sub_a_user_id
 from source.db.config import get_mercadopago_webhook_secret
+from source.db.models import User
 from source.db.session import get_db
 from source.services.discount_s import (
     create_discount,
@@ -144,6 +151,16 @@ def get_current_user(
     return payload
 
 
+def get_current_user_id(current_user: dict) -> int:
+    try:
+        return parsear_sub_a_user_id(current_user.get("sub"))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token subject",
+        ) from exc
+
+
 def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
     if not current_user.get("is_admin", False):
         raise HTTPException(
@@ -167,6 +184,12 @@ class CreateUserRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     first_name: str
     last_name: str
+    email: EmailStr
+    password: str
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     email: EmailStr
     password: str
 
@@ -340,20 +363,99 @@ def delete_product(
 @app.post("/users")
 def create_user(
     payload: CreateUserRequest,
-    _db: Session = Depends(get_db),
+    db: Session = Depends(get_db),
 ):
     user_data = payload.model_dump()
+    normalized_email = user_data["email"].strip().lower()
+    if not normalized_email:
+        raise HTTPException(status_code=400, detail="email is required")
+
+    existing_user = db.query(User).filter(User.email == normalized_email).first()
+    if existing_user is not None:
+        raise HTTPException(status_code=409, detail="email already exists")
+
+    try:
+        user = User(
+            first_name=user_data["first_name"].strip(),
+            last_name=user_data["last_name"].strip(),
+            email=normalized_email,
+            phone=None,
+            password_hash=hash_password(user_data["password"]),
+            is_admin=False,
+            is_active=True,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
+
     return {
         "data": {
-            "id": 1,
-            "first_name": user_data["first_name"],
-            "last_name": user_data["last_name"],
-            "email": user_data["email"],
-            "is_admin": False,
-            "is_active": True,
+            "id": int(user.id),
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "email": user.email,
+            "is_admin": bool(user.is_admin),
+            "is_active": bool(user.is_active),
             "status": "created",
         }
     }
+
+
+# -------------------------
+# AUTH
+# -------------------------
+
+@app.post("/auth/login")
+def login(
+    payload: LoginRequest,
+    db: Session = Depends(get_db),
+):
+    try:
+        user = authenticate_user(
+            email=payload.email,
+            password=payload.password,
+            db=db,
+        )
+        tokens = issue_token_pair(user=user, db=db)
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
+    return {"data": tokens}
+
+
+@app.post("/auth/refresh")
+def refresh(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+):
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing bearer token",
+        )
+    try:
+        tokens = refresh_with_token(refresh_token=credentials.credentials, db=db)
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
+    return {"data": tokens}
+
+
+@app.post("/auth/logout")
+def logout(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+):
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing bearer token",
+        )
+    try:
+        logout_with_refresh_token(refresh_token=credentials.credentials, db=db)
+    except Exception as exc:
+        _raise_http_error_from_exception(exc, db=db)
+    return {"data": {"logged_out": True}}
 
 
 # -------------------------
@@ -497,13 +599,7 @@ def create_order_payment(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    try:
-        user_id = int(current_user["sub"])
-    except (TypeError, ValueError):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token subject",
-        )
+    user_id = get_current_user_id(current_user)
     normalized_idempotency_key = idempotency_key.strip()
     if not normalized_idempotency_key:
         raise HTTPException(
@@ -533,13 +629,7 @@ def list_order_payments(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    try:
-        user_id = int(current_user["sub"])
-    except (TypeError, ValueError):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token subject",
-        )
+    user_id = get_current_user_id(current_user)
 
     try:
         payments = list_payments_for_order(
@@ -559,13 +649,7 @@ def get_payment(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    try:
-        user_id = int(current_user["sub"])
-    except (TypeError, ValueError):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token subject",
-        )
+    user_id = get_current_user_id(current_user)
 
     try:
         payment = get_payment_for_user(
