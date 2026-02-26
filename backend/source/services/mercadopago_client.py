@@ -2,6 +2,12 @@ from __future__ import annotations
 
 import time
 
+from sqlalchemy.orm import Session
+
+from source.dependencies.mercadopago_d import (
+    _extract_mercadopago_data_id,
+    _is_mercadopago_signature_valid,
+)
 from source.db.config import (
     get_mercadopago_access_token,
     get_mercadopago_timeout_seconds,
@@ -144,3 +150,68 @@ def get_payment_by_id(payment_id: str | int) -> dict:
         return data
 
     raise PaymentProviderUnavailableError("mercadopago payment lookup failed")
+
+
+def resolver_evento_webhook_mercadopago(
+    *,
+    payload: dict,
+    x_signature: str | None,
+    x_request_id: str | None,
+    db: Session,
+) -> dict:
+    if not isinstance(payload, dict):
+        return {"processed": False, "reason": "invalid webhook payload"}
+
+    data_id = _extract_mercadopago_data_id(payload)
+    if data_id is None:
+        return {"processed": False, "reason": "missing data.id"}
+
+    is_signature_valid = _is_mercadopago_signature_valid(
+        data_id=data_id,
+        request_id=x_request_id,
+        signature_header=x_signature,
+    )
+    if not is_signature_valid:
+        return {"processed": False, "reason": "invalid signature"}
+
+    try:
+        mp_payment = get_payment_by_id(data_id)
+    except Exception:
+        return {"processed": False, "reason": "payment lookup failed"}
+
+    # Local imports avoid a module cycle: payment_s imports this client module.
+    from source.services.payment_s import (
+        apply_mercadopago_normalized_state,
+        find_payment_for_mercadopago_event,
+        normalize_mp_payment_state,
+    )
+
+    try:
+        normalized_state = normalize_mp_payment_state(mp_payment)
+    except Exception:
+        return {"processed": False, "reason": "invalid mercadopago payment payload"}
+
+    external_ref = str(normalized_state["external_reference"])
+    try:
+        payment = find_payment_for_mercadopago_event(
+            preference_id=None,
+            external_ref=external_ref,
+            db=db,
+        )
+    except Exception:
+        return {"processed": False, "reason": "reconciliation failed"}
+
+    if payment is None:
+        return {"processed": False, "reason": "payment not found"}
+
+    try:
+        updated_payment = apply_mercadopago_normalized_state(
+            payment_id=int(payment["id"]),
+            normalized_state=normalized_state,
+            notification_payload=payload,
+            db=db,
+        )
+    except Exception as exc:
+        return {"processed": False, "reason": str(exc)}
+
+    return {"processed": True, "payment": updated_payment}
