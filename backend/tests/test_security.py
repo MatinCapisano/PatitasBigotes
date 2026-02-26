@@ -25,7 +25,7 @@ class SecurityTests(unittest.TestCase):
 
     def test_create_access_token_zero_delta_uses_immediate_expiry(self) -> None:
         token = security.create_access_token(
-            {"sub": "user-1"},
+            {"sub": "1"},
             expires_delta=timedelta(0),
         )
         claims = self._decode_payload_without_verification(token)
@@ -40,6 +40,21 @@ class SecurityTests(unittest.TestCase):
 
         self.assertEqual(str(ctx.exception), "Invalid token")
         self.assertIsNotNone(ctx.exception.__cause__)
+
+    def test_create_access_token_default_expiration_is_120_minutes(self) -> None:
+        now_ts = datetime.now(timezone.utc).timestamp()
+        token = security.create_access_token({"sub": "1"})
+        claims = self._decode_payload_without_verification(token)
+        exp_ts = claims["exp"]
+
+        self.assertGreaterEqual(exp_ts - now_ts, 119 * 60)
+        self.assertLessEqual(exp_ts - now_ts, 121 * 60)
+
+    def test_decode_access_token_rejects_refresh_token(self) -> None:
+        refresh = security.create_refresh_token(usuario_id=1)
+        with self.assertRaises(ValueError) as ctx:
+            security.decode_access_token(refresh)
+        self.assertEqual(str(ctx.exception), "Invalid token type")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,8 @@
 2. Replace placeholder values with your local configuration.
 3. Never commit `backend/.env` (it is ignored by git).
 4. For Mercado Pago integration, set `MERCADOPAGO_ACCESS_TOKEN` and keep `MERCADOPAGO_ENV=sandbox` for test mode.
+5. JWT defaults for auth are `ACCESS_TOKEN_EXPIRE_MINUTES=120` and `REFRESH_TOKEN_EXPIRE_DAYS=30`.
+6. Set `JWT_ISSUER` consistently between token creation and validation.
 
 ## Initialize database tables
 
