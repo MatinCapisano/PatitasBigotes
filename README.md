@@ -17,6 +17,42 @@ Run from `backend/`:
 python -m source.db.init_db
 ```
 
+## Product price migration (product -> variants)
+
+Catalog product endpoints now expose `min_var_price` instead of `price`.
+
+### SQL migration
+
+Backfill is not required because prices already live in `product_variants.price`.
+To drop `products.price` in PostgreSQL:
+
+```sql
+ALTER TABLE products DROP COLUMN price;
+```
+
+For SQLite (without direct DROP COLUMN support), recreate the table:
+
+```sql
+PRAGMA foreign_keys=off;
+
+CREATE TABLE products_new (
+  id INTEGER PRIMARY KEY,
+  name VARCHAR NOT NULL,
+  description VARCHAR,
+  category_id INTEGER NOT NULL,
+  FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE RESTRICT
+);
+
+INSERT INTO products_new (id, name, description, category_id)
+SELECT id, name, description, category_id
+FROM products;
+
+DROP TABLE products;
+ALTER TABLE products_new RENAME TO products;
+
+PRAGMA foreign_keys=on;
+```
+
 ## Pagos MP en local (Uvicorn + ngrok fijo)
 
 ### Requisitos

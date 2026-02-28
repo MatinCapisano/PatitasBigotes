@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Literal
 
-from sqlalchemy import asc, desc
+from sqlalchemy import asc, desc, func
 from sqlalchemy.orm import Session, joinedload
 
 from source.db.models import Category, Product, ProductVariant
@@ -28,13 +28,20 @@ def _product_inventory(product: Product) -> tuple[int, int]:
     return total_stock, active_flag
 
 
+def _compute_min_var_price(product: Product) -> float | None:
+    prices = [float(variant.price) for variant in product.variants]
+    if not prices:
+        return None
+    return float(min(prices))
+
+
 def _product_to_dict(product: Product) -> dict:
     stock, active = _product_inventory(product)
     return {
         "id": product.id,
         "name": product.name,
         "description": product.description,
-        "price": float(product.price),
+        "min_var_price": _compute_min_var_price(product),
         "category": product.category.name if product.category is not None else None,
         "stock": stock,
         "active": active,
@@ -54,36 +61,6 @@ def _variant_to_dict(variant: ProductVariant) -> dict:
     }
 
 
-def _build_default_sku(session: Session, product_id: int) -> str:
-    base = f"PRODUCT-{product_id}-DEFAULT"
-    sku = base
-    suffix = 1
-    while session.query(ProductVariant.id).filter(ProductVariant.sku == sku).first() is not None:
-        suffix += 1
-        sku = f"{base}-{suffix}"
-    return sku
-
-
-def _ensure_default_variant_for_product(session: Session, product: Product) -> ProductVariant:
-    for variant in product.variants:
-        if variant.is_active:
-            return variant
-
-    default_variant = ProductVariant(
-        product_id=product.id,
-        sku=_build_default_sku(session=session, product_id=product.id),
-        size=None,
-        color=None,
-        price=float(product.price),
-        stock=0,
-        is_active=True,
-    )
-    session.add(default_variant)
-    session.flush()
-    session.refresh(product)
-    return default_variant
-
-
 def filter_and_sort_products(
     db: Session | None = None,
     min_price: float | None = None,
@@ -93,25 +70,38 @@ def filter_and_sort_products(
     sort_order: Literal["asc", "desc"] = "asc",
 ) -> list[dict]:
     with _session_scope(db) as (session, _):
-        query = session.query(Product).options(
-            joinedload(Product.category),
-            joinedload(Product.variants),
+        min_price_subquery = (
+            session.query(
+                ProductVariant.product_id.label("product_id"),
+                func.min(ProductVariant.price).label("min_var_price"),
+            )
+            .group_by(ProductVariant.product_id)
+            .subquery()
+        )
+
+        query = (
+            session.query(Product, min_price_subquery.c.min_var_price)
+            .outerjoin(min_price_subquery, Product.id == min_price_subquery.c.product_id)
+            .options(
+                joinedload(Product.category),
+                joinedload(Product.variants),
+            )
         )
 
         if min_price is not None:
-            query = query.filter(Product.price >= min_price)
+            query = query.filter(min_price_subquery.c.min_var_price >= min_price)
         if max_price is not None:
-            query = query.filter(Product.price <= max_price)
+            query = query.filter(min_price_subquery.c.min_var_price <= max_price)
         if category is not None:
             query = query.join(Product.category).filter_by(name=category)
 
         if sort_by is not None:
-            column = Product.price if sort_by == "price" else Product.name
+            column = min_price_subquery.c.min_var_price if sort_by == "price" else Product.name
             query = query.order_by(desc(column) if sort_order == "desc" else asc(column))
         else:
             query = query.order_by(Product.id.asc())
 
-        return [_product_to_dict(product) for product in query.all()]
+        return [_product_to_dict(product) for product, _ in query.all()]
 
 
 def get_product_by_id(product_id: int, db: Session | None = None) -> dict | None:
@@ -128,7 +118,7 @@ def get_product_by_id(product_id: int, db: Session | None = None) -> dict | None
 
 
 def update_product(product_id: int, updates: dict, db: Session | None = None) -> dict | None:
-    allowed_fields = {"name", "description", "price", "category", "active"}
+    allowed_fields = {"name", "description", "category", "active"}
     with _session_scope(db) as (session, owns_session):
         product = (
             session.query(Product)
@@ -150,14 +140,11 @@ def update_product(product_id: int, updates: dict, db: Session | None = None) ->
             elif field == "active":
                 active_flag = bool(value)
                 if active_flag:
-                    _ensure_default_variant_for_product(session=session, product=product)
                     for variant in product.variants:
                         variant.is_active = True
                 else:
                     for variant in product.variants:
                         variant.is_active = False
-            elif field == "price":
-                product.price = float(value)
             else:
                 setattr(product, field, value)
 
@@ -173,26 +160,12 @@ def create_product(payload: dict, db: Session | None = None) -> dict:
     if not name:
         raise ValueError("name is required")
 
-    raw_price = payload.get("price")
-    if raw_price is None:
-        raise ValueError("price is required")
-    price = float(raw_price)
-    if price <= 0:
-        raise ValueError("price must be greater than 0")
-
     category_name = str(payload.get("category", "")).strip()
     if not category_name:
         raise ValueError("category is required")
 
-    stock = int(payload.get("stock", 0))
-    if stock < 0:
-        raise ValueError("stock must be greater than or equal to 0")
-
-    active = bool(payload.get("active", True))
     description = payload.get("description")
     normalized_description = None if description is None else str(description).strip() or None
-    size = payload.get("size")
-    color = payload.get("color")
 
     with _session_scope(db) as (session, owns_session):
         category = session.query(Category).filter(Category.name == category_name).first()
@@ -202,24 +175,11 @@ def create_product(payload: dict, db: Session | None = None) -> dict:
         product = Product(
             name=name,
             description=normalized_description,
-            price=price,
             category_id=category.id,
         )
         session.add(product)
         session.flush()
 
-        variant = ProductVariant(
-            product_id=product.id,
-            sku=_build_default_sku(session=session, product_id=product.id),
-            size=None if size is None else str(size).strip() or None,
-            color=None if color is None else str(color).strip() or None,
-            price=price,
-            stock=stock,
-            is_active=active,
-        )
-        session.add(variant)
-
-        session.flush()
         if owns_session:
             session.commit()
         session.refresh(product)
@@ -254,7 +214,7 @@ def activate_product(product_id: int, db: Session | None = None) -> dict | None:
 
 
 def ensure_product_has_variant(product_id: int, db: Session | None = None) -> list[dict]:
-    with _session_scope(db) as (session, owns_session):
+    with _session_scope(db) as (session, _):
         product = (
             session.query(Product)
             .options(joinedload(Product.variants))
@@ -268,10 +228,7 @@ def ensure_product_has_variant(product_id: int, db: Session | None = None) -> li
         if active_variants:
             return [_variant_to_dict(variant) for variant in active_variants]
 
-        created = _ensure_default_variant_for_product(session=session, product=product)
-        if owns_session:
-            session.commit()
-        return [_variant_to_dict(created)]
+        raise LookupError("product has no active variants")
 
 
 def add_stock(product_id: int, quantity: int, db: Session | None = None) -> dict:

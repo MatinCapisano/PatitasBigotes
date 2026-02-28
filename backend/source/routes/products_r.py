@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from source.dependencies.auth_d import require_admin
-from source.db.session import get_db
+from source.db.session import get_db_transactional
 from source.errors import raise_http_error_from_exception
 from source.schemas import (
     CreateProductRequest,
@@ -29,9 +29,10 @@ def get_products(
     category: Optional[str] = Query(None),
     sort_by: Optional[Literal["price", "name"]] = Query(None),
     sort_order: Literal["asc", "desc"] = Query("asc"),
-    _db: Session = Depends(get_db),
+    db: Session = Depends(get_db_transactional),
 ):
     products = filter_and_sort_products(
+        db=db,
         min_price=min_price,
         max_price=max_price,
         category=category,
@@ -56,9 +57,9 @@ def get_products(
 @router.get("/products/{product_id}")
 def get_product(
     product_id: int,
-    _db: Session = Depends(get_db),
+    db: Session = Depends(get_db_transactional),
 ):
-    product = get_product_by_id(product_id)
+    product = get_product_by_id(product_id, db=db)
 
     if product is None:
         raise HTTPException(
@@ -73,7 +74,7 @@ def get_product(
 def create_product(
     payload: CreateProductRequest,
     _: dict = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_transactional),
 ):
     try:
         product = create_product_s(payload=payload.model_dump(), db=db)
@@ -87,7 +88,7 @@ def update_product(
     product_id: int,
     payload: UpdateProductRequest,
     _: dict = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_transactional),
 ):
     try:
         product = update_product_s(
@@ -107,7 +108,7 @@ def patch_product(
     product_id: int,
     payload: PatchProductRequest,
     _: dict = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_transactional),
 ):
     updates = payload.model_dump(exclude_none=True)
     if not updates:
@@ -129,7 +130,7 @@ def patch_product(
 def delete_product(
     product_id: int,
     _: dict = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_transactional),
 ):
     try:
         product = delete_product_hard(product_id=product_id, db=db)
