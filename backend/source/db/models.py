@@ -74,8 +74,10 @@ class User(Base):
     last_name = Column(String, nullable=False)
 
     email = Column(String, nullable=False, unique=True, index=True)
+    dni = Column(String, nullable=True, index=True)
     phone = Column(String, nullable=True)
     password_hash = Column(String, nullable=False)
+    has_account = Column(Boolean, default=False, nullable=False)
 
     is_admin = Column(Boolean, default=False, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)

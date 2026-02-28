@@ -1,0 +1,197 @@
+from __future__ import annotations
+
+from fastapi import HTTPException
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from auth.security import hash_password
+from source.db.models import User
+from source.schemas import CreateGuestUserRequest, CreateUserRequest
+
+
+def _serialize_user_created(user: User) -> dict:
+    return {
+        "id": int(user.id),
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "email": user.email,
+        "dni": user.dni,
+        "phone": user.phone,
+        "has_account": bool(user.has_account),
+        "is_admin": bool(user.is_admin),
+        "is_active": bool(user.is_active),
+        "status": "created",
+    }
+
+
+def serialize_user_basic(user: User) -> dict:
+    return {
+        "id": int(user.id),
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "email": user.email,
+        "dni": user.dni,
+        "phone": user.phone,
+        "has_account": bool(user.has_account),
+        "is_active": bool(user.is_active),
+    }
+
+
+def _normalize_required_text(value: str, *, field_name: str) -> str:
+    normalized = str(value).strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail=f"{field_name} is required")
+    return normalized
+
+
+def _normalize_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def create_user(payload: CreateUserRequest, db: Session) -> dict:
+    user_data = payload.model_dump()
+    normalized_email = str(user_data["email"]).strip().lower()
+    if not normalized_email:
+        raise HTTPException(status_code=400, detail="email is required")
+
+    existing_user = db.query(User).filter(User.email == normalized_email).first()
+    if existing_user is not None:
+        raise HTTPException(status_code=409, detail="email already exists")
+
+    user = User(
+        first_name=_normalize_required_text(
+            user_data["first_name"],
+            field_name="first_name",
+        ),
+        last_name=_normalize_required_text(
+            user_data["last_name"],
+            field_name="last_name",
+        ),
+        email=normalized_email,
+        phone=None,
+        password_hash=hash_password(user_data["password"]),
+        has_account=True,
+        is_admin=False,
+        is_active=True,
+    )
+    db.add(user)
+    db.flush()
+    db.refresh(user)
+    return _serialize_user_created(user)
+
+
+def create_guest_user(payload: CreateGuestUserRequest, db: Session) -> dict:
+    user_data = payload.model_dump()
+    normalized_email = str(user_data["email"]).strip().lower()
+    if not normalized_email:
+        raise HTTPException(status_code=400, detail="email is required")
+
+    existing_user = db.query(User).filter(User.email == normalized_email).first()
+    if existing_user is not None:
+        raise HTTPException(status_code=409, detail="email already exists")
+
+    user = User(
+        first_name=_normalize_required_text(
+            user_data["first_name"],
+            field_name="first_name",
+        ),
+        last_name=_normalize_required_text(
+            user_data["last_name"],
+            field_name="last_name",
+        ),
+        email=normalized_email,
+        phone=_normalize_required_text(
+            user_data["phone"],
+            field_name="phone",
+        ),
+        # Sentinel invalid hash: prevents authentication until account activation flow.
+        password_hash="!",
+        has_account=False,
+        is_admin=False,
+        is_active=True,
+    )
+    db.add(user)
+    db.flush()
+    db.refresh(user)
+    return _serialize_user_created(user)
+
+
+def get_or_create_user_by_contact(
+    *,
+    email: str,
+    first_name: str,
+    last_name: str,
+    phone: str,
+    db: Session,
+) -> tuple[User, bool]:
+    normalized_email = str(email).strip().lower()
+    if not normalized_email:
+        raise HTTPException(status_code=400, detail="email is required")
+
+    existing_user = db.query(User).filter(User.email == normalized_email).first()
+    if existing_user is not None:
+        return existing_user, False
+
+    user = User(
+        first_name=_normalize_required_text(first_name, field_name="first_name"),
+        last_name=_normalize_required_text(last_name, field_name="last_name"),
+        email=normalized_email,
+        phone=_normalize_required_text(phone, field_name="phone"),
+        # Sentinel invalid hash: prevents authentication until account activation flow.
+        password_hash="!",
+        has_account=False,
+        is_admin=False,
+        is_active=True,
+    )
+    db.add(user)
+    db.flush()
+    db.refresh(user)
+    return user, True
+
+
+def search_users(
+    *,
+    db: Session,
+    email: str | None = None,
+    dni: str | None = None,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    phone: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    normalized_email = _normalize_optional_text(email)
+    normalized_dni = _normalize_optional_text(dni)
+    normalized_first_name = _normalize_optional_text(first_name)
+    normalized_last_name = _normalize_optional_text(last_name)
+    normalized_phone = _normalize_optional_text(phone)
+
+    if not any(
+        [
+            normalized_email,
+            normalized_dni,
+            normalized_first_name,
+            normalized_last_name,
+            normalized_phone,
+        ]
+    ):
+        raise ValueError("at least one search filter is required")
+
+    safe_limit = max(1, min(int(limit), 100))
+    query = db.query(User)
+
+    if normalized_email is not None:
+        query = query.filter(User.email == normalized_email.lower())
+    if normalized_dni is not None:
+        query = query.filter(User.dni == normalized_dni)
+    if normalized_first_name is not None:
+        query = query.filter(func.lower(User.first_name).like(f"%{normalized_first_name.lower()}%"))
+    if normalized_last_name is not None:
+        query = query.filter(func.lower(User.last_name).like(f"%{normalized_last_name.lower()}%"))
+    if normalized_phone is not None:
+        query = query.filter(User.phone.like(f"%{normalized_phone}%"))
+
+    users = query.order_by(User.created_at.desc(), User.id.desc()).limit(safe_limit).all()
+    return [serialize_user_basic(user) for user in users]

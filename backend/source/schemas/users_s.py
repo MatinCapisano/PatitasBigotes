@@ -7,3 +7,11 @@ class CreateUserRequest(BaseModel):
     last_name: str
     email: EmailStr
     password: str
+
+
+class CreateGuestUserRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    first_name: str
+    last_name: str
+    email: EmailStr
+    phone: str

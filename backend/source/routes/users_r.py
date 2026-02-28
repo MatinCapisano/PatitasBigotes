@@ -1,11 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from auth.security import hash_password
-from source.db.models import User
-from source.db.session import get_db
+from source.dependencies.auth_d import require_admin
+from source.db.session import get_db_transactional
 from source.errors import raise_http_error_from_exception
-from source.schemas import CreateUserRequest
+from source.schemas import CreateGuestUserRequest, CreateUserRequest
+from source.services.users_s import (
+    create_guest_user as create_guest_user_service,
+)
+from source.services.users_s import create_user as create_user_service
+from source.services.users_s import search_users as search_users_service
 
 router = APIRouter()
 
@@ -13,41 +17,51 @@ router = APIRouter()
 @router.post("/users")
 def create_user(
     payload: CreateUserRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_transactional),
 ):
-    user_data = payload.model_dump()
-    normalized_email = user_data["email"].strip().lower()
-    if not normalized_email:
-        raise HTTPException(status_code=400, detail="email is required")
-
-    existing_user = db.query(User).filter(User.email == normalized_email).first()
-    if existing_user is not None:
-        raise HTTPException(status_code=409, detail="email already exists")
-
     try:
-        user = User(
-            first_name=user_data["first_name"].strip(),
-            last_name=user_data["last_name"].strip(),
-            email=normalized_email,
-            phone=None,
-            password_hash=hash_password(user_data["password"]),
-            is_admin=False,
-            is_active=True,
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+        created_user = create_user_service(payload=payload, db=db)
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
 
-    return {
-        "data": {
-            "id": int(user.id),
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "email": user.email,
-            "is_admin": bool(user.is_admin),
-            "is_active": bool(user.is_active),
-            "status": "created",
-        }
-    }
+    return {"data": created_user}
+
+
+@router.post("/users/guest")
+def create_guest_user(
+    payload: CreateGuestUserRequest,
+    db: Session = Depends(get_db_transactional),
+):
+    try:
+        created_user = create_guest_user_service(payload=payload, db=db)
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+
+    return {"data": created_user}
+
+
+@router.get("/users/search")
+def search_users(
+    email: str | None = None,
+    dni: str | None = None,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    phone: str | None = None,
+    limit: int = 20,
+    _: dict = Depends(require_admin),
+    db: Session = Depends(get_db_transactional),
+):
+    try:
+        users = search_users_service(
+            db=db,
+            email=email,
+            dni=dni,
+            first_name=first_name,
+            last_name=last_name,
+            phone=phone,
+            limit=limit,
+        )
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+
+    return {"data": users}

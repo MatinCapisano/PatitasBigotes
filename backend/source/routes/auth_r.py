@@ -9,7 +9,7 @@ from auth.auth_s import (
     refresh_with_token,
 )
 from source.dependencies.auth_d import bearer_scheme
-from source.db.session import get_db
+from source.db.session import get_db_transactional
 from source.errors import raise_http_error_from_exception
 from source.schemas import LoginRequest
 
@@ -19,7 +19,7 @@ router = APIRouter()
 @router.post("/auth/login")
 def login(
     payload: LoginRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_transactional),
 ):
     try:
         user = authenticate_user(
@@ -36,7 +36,7 @@ def login(
 @router.post("/auth/refresh")
 def refresh(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_transactional),
 ):
     if credentials is None:
         raise HTTPException(
@@ -53,7 +53,7 @@ def refresh(
 @router.post("/auth/logout")
 def logout(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_transactional),
 ):
     if credentials is None:
         raise HTTPException(

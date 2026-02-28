@@ -93,7 +93,6 @@ def issue_token_pair(*, user: User, db: Session) -> dict:
         refresh_claims=refresh_claims,
         db=db,
     )
-    db.commit()
 
     settings = obtener_config_jwt()
     minutes = settings["access_token_expire_minutes"]
@@ -144,4 +143,3 @@ def logout_with_refresh_token(*, refresh_token: str, db: Session) -> None:
     )
     if session_row is not None:
         db.delete(session_row)
-    db.commit()
