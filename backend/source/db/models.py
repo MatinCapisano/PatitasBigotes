@@ -9,6 +9,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     text,
 )
 from sqlalchemy.orm import declarative_base, relationship
@@ -247,6 +248,19 @@ class Payment(Base):
     )
 
     order = relationship("Order", back_populates="payments")
+
+
+class WebhookEvent(Base):
+    __tablename__ = "webhook_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    provider = Column(String, nullable=False, index=True)
+    event_key = Column(String, nullable=False, unique=True, index=True)
+    status = Column(String, nullable=False, default="processing")
+    payload = Column(Text, nullable=True)
+    received_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    processed_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
 
 
 class Discount(Base):

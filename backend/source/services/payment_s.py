@@ -15,7 +15,7 @@ from source.db.config import (
     get_mercadopago_pending_url,
     get_mercadopago_success_url,
 )
-from source.db.models import Order, OrderItem, Payment, ProductVariant
+from source.db.models import Order, OrderItem, Payment, ProductVariant, WebhookEvent
 from source.services.mercadopago_client import create_checkout_preference
 
 ALLOWED_PAYMENT_METHODS = {"bank_transfer", "mercadopago"}
@@ -74,6 +74,113 @@ def _deserialize_provider_payload(payload: str | None) -> dict | None:
     if not isinstance(parsed, dict):
         return None
     return parsed
+
+
+def _normalize_webhook_key_part(value: object) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    return normalized
+
+
+def acquire_webhook_event(
+    *,
+    provider: str,
+    event_key: str,
+    payload: dict | None,
+    db: Session,
+) -> bool:
+    normalized_provider = _normalize_webhook_key_part(provider)
+    normalized_key = _normalize_webhook_key_part(event_key)
+    if normalized_provider is None:
+        raise ValueError("provider is required")
+    if normalized_key is None:
+        raise ValueError("event_key is required")
+
+    now = datetime.utcnow()
+    event = WebhookEvent(
+        provider=normalized_provider,
+        event_key=normalized_key,
+        status="processing",
+        payload=_serialize_provider_payload(payload) if isinstance(payload, dict) else None,
+        received_at=now,
+        processed_at=None,
+        last_error=None,
+    )
+    try:
+        with db.begin_nested():
+            db.add(event)
+            db.flush()
+        return True
+    except IntegrityError:
+        existing = (
+            db.query(WebhookEvent)
+            .filter(
+                WebhookEvent.provider == normalized_provider,
+                WebhookEvent.event_key == normalized_key,
+            )
+            .with_for_update()
+            .first()
+        )
+        if existing is None:
+            return False
+        if existing.status == "failed":
+            existing.status = "processing"
+            existing.received_at = now
+            existing.processed_at = None
+            existing.last_error = None
+            if isinstance(payload, dict):
+                existing.payload = _serialize_provider_payload(payload)
+            db.flush()
+            return True
+        return False
+
+
+def mark_webhook_event_processed(
+    *,
+    provider: str,
+    event_key: str,
+    db: Session,
+) -> None:
+    event = (
+        db.query(WebhookEvent)
+        .filter(
+            WebhookEvent.provider == provider,
+            WebhookEvent.event_key == event_key,
+        )
+        .first()
+    )
+    if event is None:
+        return
+    event.status = "processed"
+    event.processed_at = datetime.utcnow()
+    event.last_error = None
+    db.flush()
+
+
+def mark_webhook_event_failed(
+    *,
+    provider: str,
+    event_key: str,
+    error_message: str,
+    db: Session,
+) -> None:
+    event = (
+        db.query(WebhookEvent)
+        .filter(
+            WebhookEvent.provider == provider,
+            WebhookEvent.event_key == event_key,
+        )
+        .first()
+    )
+    if event is None:
+        return
+    event.status = "failed"
+    event.processed_at = datetime.utcnow()
+    event.last_error = (error_message or "webhook processing failed")[:2000]
+    db.flush()
 
 
 def _normalize_optional_str(value: str | None) -> str | None:

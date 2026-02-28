@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import time
 
 from sqlalchemy.orm import Session
 
 from source.dependencies.mercadopago_d import (
     _extract_mercadopago_data_id,
-    _is_mercadopago_signature_valid,
+    is_mercadopago_signature_valid,
 )
 from source.db.config import (
     get_mercadopago_access_token,
@@ -30,6 +31,40 @@ else:
 
 MAX_RETRY_ATTEMPTS = 3
 RETRY_BASE_DELAY_SECONDS = 0.2
+
+
+@dataclass(frozen=True)
+class WebhookResult:
+    processed: bool
+    reason: str | None = None
+    payment: dict | None = None
+
+
+class WebhookNoOpError(Exception):
+    pass
+
+
+class WebhookInvalidSignatureError(Exception):
+    pass
+
+
+def _normalize_event_key_part(value: object) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    return normalized
+
+
+def _build_mp_event_key(payload: dict, data_id: str | int) -> str:
+    event_id = _normalize_event_key_part(payload.get("id"))
+    if event_id is not None:
+        return f"mp:event:{event_id}"
+
+    topic = _normalize_event_key_part(payload.get("type") or payload.get("topic")) or "payment"
+    action = _normalize_event_key_part(payload.get("action")) or "unknown"
+    return f"mp:{topic}:{data_id}:{action}"
 
 
 def _get_sdk():
@@ -158,60 +193,85 @@ def resolver_evento_webhook_mercadopago(
     x_signature: str | None,
     x_request_id: str | None,
     db: Session,
-) -> dict:
+) -> WebhookResult:
     if not isinstance(payload, dict):
-        return {"processed": False, "reason": "invalid webhook payload"}
+        raise WebhookNoOpError("invalid webhook payload")
+
+    topic = str(payload.get("type") or payload.get("topic") or "").strip().lower()
+    if topic and topic not in {"payment"}:
+        raise WebhookNoOpError("unsupported topic")
 
     data_id = _extract_mercadopago_data_id(payload)
     if data_id is None:
-        return {"processed": False, "reason": "missing data.id"}
+        raise WebhookNoOpError("missing data.id")
 
-    is_signature_valid = _is_mercadopago_signature_valid(
+    is_signature_valid = is_mercadopago_signature_valid(
         data_id=data_id,
         request_id=x_request_id,
         signature_header=x_signature,
     )
     if not is_signature_valid:
-        return {"processed": False, "reason": "invalid signature"}
+        raise WebhookInvalidSignatureError("invalid signature")
 
-    try:
-        mp_payment = get_payment_by_id(data_id)
-    except Exception:
-        return {"processed": False, "reason": "payment lookup failed"}
+    event_key = _build_mp_event_key(payload, data_id)
 
     # Local imports avoid a module cycle: payment_s imports this client module.
     from source.services.payment_s import (
+        acquire_webhook_event,
         apply_mercadopago_normalized_state,
         find_payment_for_mercadopago_event,
+        mark_webhook_event_failed,
+        mark_webhook_event_processed,
         normalize_mp_payment_state,
     )
 
-    try:
-        normalized_state = normalize_mp_payment_state(mp_payment)
-    except Exception:
-        return {"processed": False, "reason": "invalid mercadopago payment payload"}
+    acquired = acquire_webhook_event(
+        provider="mercadopago",
+        event_key=event_key,
+        payload=payload,
+        db=db,
+    )
+    if not acquired:
+        raise WebhookNoOpError("duplicate webhook event")
 
-    external_ref = str(normalized_state["external_reference"])
     try:
+        mp_payment = get_payment_by_id(data_id)
+        normalized_state = normalize_mp_payment_state(mp_payment)
+        external_ref = str(normalized_state["external_reference"])
         payment = find_payment_for_mercadopago_event(
             preference_id=None,
             external_ref=external_ref,
             db=db,
         )
-    except Exception:
-        return {"processed": False, "reason": "reconciliation failed"}
 
-    if payment is None:
-        return {"processed": False, "reason": "payment not found"}
+        if payment is None:
+            raise WebhookNoOpError("payment not found")
 
-    try:
         updated_payment = apply_mercadopago_normalized_state(
             payment_id=int(payment["id"]),
             normalized_state=normalized_state,
             notification_payload=payload,
             db=db,
         )
+    except WebhookNoOpError:
+        mark_webhook_event_processed(
+            provider="mercadopago",
+            event_key=event_key,
+            db=db,
+        )
+        raise
     except Exception as exc:
-        return {"processed": False, "reason": str(exc)}
+        mark_webhook_event_failed(
+            provider="mercadopago",
+            event_key=event_key,
+            error_message=str(exc),
+            db=db,
+        )
+        raise
 
-    return {"processed": True, "payment": updated_payment}
+    mark_webhook_event_processed(
+        provider="mercadopago",
+        event_key=event_key,
+        db=db,
+    )
+    return WebhookResult(processed=True, payment=updated_payment)

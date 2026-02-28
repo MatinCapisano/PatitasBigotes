@@ -31,7 +31,7 @@ def _parse_mercadopago_signature_header(
     return parsed.get("ts"), parsed.get("v1")
 
 
-def _is_mercadopago_signature_valid(
+def is_mercadopago_signature_valid(
     *,
     data_id: str,
     request_id: str | None,
