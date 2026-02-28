@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 from datetime import datetime, timedelta
 import hashlib
 import json
@@ -17,7 +16,6 @@ from source.db.config import (
     get_mercadopago_success_url,
 )
 from source.db.models import Order, OrderItem, Payment, ProductVariant
-from source.db.session import SessionLocal
 from source.services.mercadopago_client import create_checkout_preference
 
 ALLOWED_PAYMENT_METHODS = {"bank_transfer", "mercadopago"}
@@ -39,18 +37,6 @@ ALLOWED_PAYMENT_TRANSITIONS = {
     "cancelled": {"cancelled"},
     "expired": {"expired"},
 }
-
-
-@contextmanager
-def _session_scope(db: Session | None):
-    owns_session = db is None
-    session = db or SessionLocal()
-    try:
-        yield session, owns_session
-    finally:
-        if owns_session:
-            session.close()
-
 
 def _payment_to_dict(payment: Payment) -> dict:
     return {
@@ -353,42 +339,41 @@ def find_payment_for_mercadopago_event(
     *,
     preference_id: str | None,
     external_ref: str | None,
-    db: Session | None = None,
+    db: Session,
 ) -> dict | None:
     normalized_preference_id = _normalize_optional_str(preference_id)
     normalized_external_ref = _normalize_optional_str(external_ref)
     if normalized_preference_id is None and normalized_external_ref is None:
         raise ValueError("preference_id or external_ref is required")
 
-    with _session_scope(db) as (session, _):
-        if normalized_preference_id is not None:
-            candidates = (
-                session.query(Payment)
-                .filter(
-                    Payment.method == "mercadopago",
-                    Payment.provider_payload.isnot(None),
-                )
-                .order_by(Payment.created_at.desc(), Payment.id.desc())
-                .all()
+    if normalized_preference_id is not None:
+        candidates = (
+            db.query(Payment)
+            .filter(
+                Payment.method == "mercadopago",
+                Payment.provider_payload.isnot(None),
             )
-            for candidate in candidates:
-                if _payment_has_preference_id(candidate, normalized_preference_id):
-                    return _payment_to_dict(candidate)
+            .order_by(Payment.created_at.desc(), Payment.id.desc())
+            .all()
+        )
+        for candidate in candidates:
+            if _payment_has_preference_id(candidate, normalized_preference_id):
+                return _payment_to_dict(candidate)
 
-        if normalized_external_ref is not None:
-            payment = (
-                session.query(Payment)
-                .filter(
-                    Payment.method == "mercadopago",
-                    Payment.external_ref == normalized_external_ref,
-                )
-                .order_by(Payment.created_at.desc(), Payment.id.desc())
-                .first()
+    if normalized_external_ref is not None:
+        payment = (
+            db.query(Payment)
+            .filter(
+                Payment.method == "mercadopago",
+                Payment.external_ref == normalized_external_ref,
             )
-            if payment is not None:
-                return _payment_to_dict(payment)
+            .order_by(Payment.created_at.desc(), Payment.id.desc())
+            .first()
+        )
+        if payment is not None:
+            return _payment_to_dict(payment)
 
-        return None
+    return None
 
 
 def apply_mercadopago_normalized_state(
@@ -396,7 +381,7 @@ def apply_mercadopago_normalized_state(
     payment_id: int,
     normalized_state: dict,
     notification_payload: dict | None = None,
-    db: Session | None = None,
+    db: Session,
 ) -> dict:
     if not isinstance(normalized_state, dict):
         raise ValueError("normalized_state is required")
@@ -420,82 +405,76 @@ def apply_mercadopago_normalized_state(
         normalized_currency = normalized_currency.upper()
 
     now = datetime.utcnow()
-    with _session_scope(db) as (session, owns_session):
-        payment = (
-            session.query(Payment)
-            .filter(Payment.id == payment_id, Payment.method == "mercadopago")
-            .first()
-        )
-        if payment is None:
-            raise LookupError("payment not found")
-        order = payment.order
-        if order is None:
-            raise LookupError("order not found")
+    payment = (
+        db.query(Payment)
+        .filter(Payment.id == payment_id, Payment.method == "mercadopago")
+        .first()
+    )
+    if payment is None:
+        raise LookupError("payment not found")
+    order = payment.order
+    if order is None:
+        raise LookupError("order not found")
 
-        payment_external_ref = _normalize_optional_str(payment.external_ref)
-        if payment_external_ref != external_reference:
-            raise ValueError("external_reference does not match payment")
+    payment_external_ref = _normalize_optional_str(payment.external_ref)
+    if payment_external_ref != external_reference:
+        raise ValueError("external_reference does not match payment")
 
-        if normalized_amount is not None and abs(float(payment.amount) - normalized_amount) > 0.01:
-            raise ValueError("payment amount mismatch")
-        if normalized_currency is not None and payment.currency.strip().upper() != normalized_currency:
-            raise ValueError("payment currency mismatch")
+    if normalized_amount is not None and abs(float(payment.amount) - normalized_amount) > 0.01:
+        raise ValueError("payment amount mismatch")
+    if normalized_currency is not None and payment.currency.strip().upper() != normalized_currency:
+        raise ValueError("payment currency mismatch")
 
-        _assert_valid_payment_transition(payment.status, internal_status)
-        payment.provider_status = provider_status
+    _assert_valid_payment_transition(payment.status, internal_status)
+    payment.provider_status = provider_status
 
-        existing_payload = _deserialize_provider_payload(payment.provider_payload) or {}
-        merged_payload = dict(existing_payload)
-        if notification_payload is not None:
-            merged_payload["last_event"] = notification_payload
-        merged_payload["payment_lookup"] = normalized_state.get("raw")
-        merged_payload["reconciliation"] = {
-            "provider_payment_id": normalized_state.get("provider_payment_id"),
-            "external_reference": external_reference,
-            "provider_status": provider_status,
-            "provider_status_detail": normalized_state.get("provider_status_detail"),
-            "internal_status": internal_status,
-            "amount_consistent": normalized_amount is None
-            or abs(float(payment.amount) - normalized_amount) <= 0.01,
-            "currency_consistent": normalized_currency is None
-            or payment.currency.strip().upper() == normalized_currency,
-            "date_last_updated": normalized_state.get("date_last_updated"),
-        }
-        payment.provider_payload = _serialize_provider_payload(merged_payload)
+    existing_payload = _deserialize_provider_payload(payment.provider_payload) or {}
+    merged_payload = dict(existing_payload)
+    if notification_payload is not None:
+        merged_payload["last_event"] = notification_payload
+    merged_payload["payment_lookup"] = normalized_state.get("raw")
+    merged_payload["reconciliation"] = {
+        "provider_payment_id": normalized_state.get("provider_payment_id"),
+        "external_reference": external_reference,
+        "provider_status": provider_status,
+        "provider_status_detail": normalized_state.get("provider_status_detail"),
+        "internal_status": internal_status,
+        "amount_consistent": normalized_amount is None
+        or abs(float(payment.amount) - normalized_amount) <= 0.01,
+        "currency_consistent": normalized_currency is None
+        or payment.currency.strip().upper() == normalized_currency,
+        "date_last_updated": normalized_state.get("date_last_updated"),
+    }
+    payment.provider_payload = _serialize_provider_payload(merged_payload)
 
-        if payment.status != internal_status:
-            payment.status = internal_status
-            if internal_status == "paid" and payment.paid_at is None:
-                payment.paid_at = now
+    if payment.status != internal_status:
+        payment.status = internal_status
+        if internal_status == "paid" and payment.paid_at is None:
+            payment.paid_at = now
 
-        if internal_status == "paid":
-            if order.status not in {"submitted", "paid"}:
-                raise ValueError("order can only be paid from submitted status")
-            if order.status != "paid":
-                order.status = "paid"
-            if order.paid_at is None:
-                order.paid_at = now
-        elif internal_status == "cancelled":
-            if order.status != "paid":
-                if order.status != "cancelled":
-                    order.status = "cancelled"
-                if order.cancelled_at is None:
-                    order.cancelled_at = now
+    if internal_status == "paid":
+        if order.status not in {"submitted", "paid"}:
+            raise ValueError("order can only be paid from submitted status")
+        if order.status != "paid":
+            order.status = "paid"
+        if order.paid_at is None:
+            order.paid_at = now
+    elif internal_status == "cancelled":
+        if order.status != "paid":
+            if order.status != "cancelled":
+                order.status = "cancelled"
+            if order.cancelled_at is None:
+                order.cancelled_at = now
 
-        session.flush()
-        if owns_session:
-            session.commit()
-        else:
-            session.flush()
-
-        session.refresh(payment)
-        return _payment_to_dict(payment)
+    db.flush()
+    db.refresh(payment)
+    return _payment_to_dict(payment)
 
 
 def create_payment_for_order(
     order_id: int,
     method: str,
-    db: Session | None = None,
+    db: Session,
     *,
     user_id: int | None = None,
     idempotency_key: str,
@@ -510,153 +489,145 @@ def create_payment_for_order(
     if not normalized_key:
         raise ValueError("idempotency_key is required")
 
-    with _session_scope(db) as (session, owns_session):
-        existing_payment = (
-            session.query(Payment)
+    existing_payment = (
+        db.query(Payment)
+        .options(joinedload(Payment.order))
+        .filter(Payment.idempotency_key == normalized_key)
+        .first()
+    )
+    if existing_payment is not None:
+        if existing_payment.order_id != order_id:
+            raise ValueError(
+                "idempotency key already used for a different order"
+            )
+        if existing_payment.method != method:
+            raise ValueError(
+                "idempotency key already used for a different payment method"
+            )
+        if user_id is not None and int(existing_payment.order.user_id) != int(user_id):
+            raise LookupError("order not found")
+        return _payment_to_dict(existing_payment)
+
+    order = (
+        db.query(Order)
+        .options(joinedload(Order.items))
+        .filter(Order.id == order_id)
+        .with_for_update()
+        .first()
+    )
+    if order is None:
+        raise LookupError("order not found")
+    if user_id is not None and int(order.user_id) != int(user_id):
+        raise LookupError("order not found")
+    if order.status == "cancelled":
+        raise ValueError("cannot create payment for a cancelled order")
+    if order.status != "submitted":
+        raise ValueError("payment can only be created for submitted orders")
+    if not order.items:
+        raise ValueError("cannot create payment for an empty order")
+
+    amount = round(float(order.total_amount or 0.0), 2)
+    if amount <= 0:
+        raise ValueError("order total must be greater than 0")
+
+    now = datetime.utcnow()
+    active_pending_payment = _find_active_pending_payment(
+        db,
+        order_id=order.id,
+        method=method,
+        now=now,
+    )
+    payment_currency = currency or order.currency or "ARS"
+    if active_pending_payment is not None:
+        _validate_active_pending_compatibility(
+            active_pending_payment,
+            requested_amount=amount,
+            requested_currency=payment_currency,
+        )
+        return _payment_to_dict(active_pending_payment)
+
+    expires_at = now + timedelta(minutes=expires_in_minutes)
+    payment = Payment(
+        order_id=order.id,
+        method=method,
+        status="pending",
+        amount=amount,
+        currency=payment_currency,
+        idempotency_key=normalized_key,
+        external_ref=None,
+        provider_status=None,
+        provider_payload=None,
+        receipt_url=None,
+        expires_at=expires_at,
+        paid_at=None,
+    )
+
+    try:
+        with db.begin_nested():
+            db.add(payment)
+            db.flush()
+    except IntegrityError:
+        payment_by_key = (
+            db.query(Payment)
             .options(joinedload(Payment.order))
             .filter(Payment.idempotency_key == normalized_key)
             .first()
         )
-        if existing_payment is not None:
-            if existing_payment.order_id != order_id:
-                raise ValueError(
-                    "idempotency key already used for a different order"
-                )
-            if existing_payment.method != method:
-                raise ValueError(
-                    "idempotency key already used for a different payment method"
-                )
-            if user_id is not None and int(existing_payment.order.user_id) != int(user_id):
+        if payment_by_key is not None:
+            if user_id is not None and int(payment_by_key.order.user_id) != int(user_id):
                 raise LookupError("order not found")
-            return _payment_to_dict(existing_payment)
+            return _payment_to_dict(payment_by_key)
 
-        order = (
-            session.query(Order)
-            .options(joinedload(Order.items))
-            .filter(Order.id == order_id)
-            .with_for_update()
-            .first()
-        )
-        if order is None:
-            raise LookupError("order not found")
-        if user_id is not None and int(order.user_id) != int(user_id):
-            raise LookupError("order not found")
-        if order.status == "cancelled":
-            raise ValueError("cannot create payment for a cancelled order")
-        if order.status != "submitted":
-            raise ValueError("payment can only be created for submitted orders")
-        if not order.items:
-            raise ValueError("cannot create payment for an empty order")
-
-        amount = round(float(order.total_amount or 0.0), 2)
-        if amount <= 0:
-            raise ValueError("order total must be greater than 0")
-
-        now = datetime.utcnow()
-        active_pending_payment = _find_active_pending_payment(
-            session,
+        existing_pending = _find_active_pending_payment(
+            db,
             order_id=order.id,
             method=method,
             now=now,
         )
-        payment_currency = currency or order.currency or "ARS"
-        if active_pending_payment is not None:
+        if existing_pending is not None:
             _validate_active_pending_compatibility(
-                active_pending_payment,
+                existing_pending,
                 requested_amount=amount,
                 requested_currency=payment_currency,
             )
-            return _payment_to_dict(active_pending_payment)
+            return _payment_to_dict(existing_pending)
+        raise
 
-        expires_at = now + timedelta(minutes=expires_in_minutes)
-        payment = Payment(
+    if method == "bank_transfer":
+        provider_payload = _build_bank_transfer_payload(
             order_id=order.id,
-            method=method,
-            status="pending",
+            payment_id=payment.id,
             amount=amount,
             currency=payment_currency,
-            idempotency_key=normalized_key,
-            external_ref=None,
-            provider_status=None,
-            provider_payload=None,
-            receipt_url=None,
-            expires_at=expires_at,
-            paid_at=None,
         )
-        session.add(payment)
-        try:
-            session.flush()
-        except IntegrityError:
-            if not owns_session:
-                raise
-
-            session.rollback()
-            payment_by_key = (
-                session.query(Payment)
-                .options(joinedload(Payment.order))
-                .filter(Payment.idempotency_key == normalized_key)
-                .first()
+        payment.provider_payload = _serialize_provider_payload(provider_payload)
+    elif method == "mercadopago":
+        existing_provider_payload = _deserialize_provider_payload(
+            payment.provider_payload
+        )
+        if _has_checkout_preference(existing_provider_payload):
+            checkout_external_ref = _get_checkout_external_ref(
+                existing_provider_payload
             )
-            if payment_by_key is not None:
-                if user_id is not None and int(payment_by_key.order.user_id) != int(user_id):
-                    raise LookupError("order not found")
-                return _payment_to_dict(payment_by_key)
-
-            existing_pending = _find_active_pending_payment(
-                session,
-                order_id=order.id,
-                method=method,
-                now=now,
-            )
-            if existing_pending is not None:
-                _validate_active_pending_compatibility(
-                    existing_pending,
-                    requested_amount=amount,
-                    requested_currency=payment_currency,
-                )
-                return _payment_to_dict(existing_pending)
-            raise
-
-        if method == "bank_transfer":
-            provider_payload = _build_bank_transfer_payload(
+            if checkout_external_ref is not None and payment.external_ref is None:
+                payment.external_ref = checkout_external_ref
+            payment.provider_status = payment.provider_status or "preference_created"
+        else:
+            external_ref, provider_payload = _build_mercadopago_payload(
                 order_id=order.id,
                 payment_id=payment.id,
                 amount=amount,
                 currency=payment_currency,
+                expires_at=expires_at,
+                payment_idempotency_key=normalized_key,
             )
+            payment.external_ref = external_ref
+            payment.provider_status = "preference_created"
             payment.provider_payload = _serialize_provider_payload(provider_payload)
-        elif method == "mercadopago":
-            existing_provider_payload = _deserialize_provider_payload(
-                payment.provider_payload
-            )
-            if _has_checkout_preference(existing_provider_payload):
-                checkout_external_ref = _get_checkout_external_ref(
-                    existing_provider_payload
-                )
-                if checkout_external_ref is not None and payment.external_ref is None:
-                    payment.external_ref = checkout_external_ref
-                payment.provider_status = payment.provider_status or "preference_created"
-            else:
-                external_ref, provider_payload = _build_mercadopago_payload(
-                    order_id=order.id,
-                    payment_id=payment.id,
-                    amount=amount,
-                    currency=payment_currency,
-                    expires_at=expires_at,
-                    payment_idempotency_key=normalized_key,
-                )
-                payment.external_ref = external_ref
-                payment.provider_status = "preference_created"
-                payment.provider_payload = _serialize_provider_payload(provider_payload)
 
-        session.flush()
-        if owns_session:
-            session.commit()
-        else:
-            session.flush()
-
-        session.refresh(payment)
-        return _payment_to_dict(payment)
+    db.flush()
+    db.refresh(payment)
+    return _payment_to_dict(payment)
 
 
 def _build_manual_payment_idempotency_key(order_id: int, payment_ref: str) -> str:
@@ -670,7 +641,7 @@ def confirm_manual_payment_for_order(
     user_id: int,
     payment_ref: str,
     paid_amount: float,
-    db: Session | None = None,
+    db: Session,
 ) -> dict:
     normalized_ref = payment_ref.strip()
     if not normalized_ref:
@@ -678,71 +649,54 @@ def confirm_manual_payment_for_order(
     if paid_amount <= 0:
         raise ValueError("paid_amount must be greater than 0")
 
-    with _session_scope(db) as (session, owns_session):
-        order = (
-            session.query(Order)
-            .options(
-                joinedload(Order.items).joinedload(OrderItem.variant),
-                joinedload(Order.payments),
-            )
-            .filter(Order.id == order_id)
-            .with_for_update()
-            .first()
+    order = (
+        db.query(Order)
+        .options(
+            joinedload(Order.items).joinedload(OrderItem.variant),
+            joinedload(Order.payments),
         )
-        if order is None or int(order.user_id) != int(user_id):
-            raise LookupError("order not found")
+        .filter(Order.id == order_id)
+        .with_for_update()
+        .first()
+    )
+    if order is None or int(order.user_id) != int(user_id):
+        raise LookupError("order not found")
 
-        if order.status == "cancelled":
-            raise ValueError("cannot pay a cancelled order")
-        if order.status not in {"submitted", "paid"}:
-            raise ValueError("order can only be paid from submitted status")
-        if not order.items:
-            raise ValueError("cannot pay an empty order")
+    if order.status == "cancelled":
+        raise ValueError("cannot pay a cancelled order")
+    if order.status not in {"submitted", "paid"}:
+        raise ValueError("order can only be paid from submitted status")
+    if not order.items:
+        raise ValueError("cannot pay an empty order")
 
-        expected_total = round(float(order.total_amount or 0.0), 2)
-        received_total = round(float(paid_amount), 2)
-        if expected_total != received_total:
-            raise ValueError("paid_amount does not match order total")
+    expected_total = round(float(order.total_amount or 0.0), 2)
+    received_total = round(float(paid_amount), 2)
+    if expected_total != received_total:
+        raise ValueError("paid_amount does not match order total")
 
-        existing_paid_by_ref = (
-            session.query(Payment)
-            .filter(
-                Payment.order_id == order.id,
-                Payment.status == "paid",
-                Payment.external_ref == normalized_ref,
-            )
-            .order_by(Payment.created_at.desc(), Payment.id.desc())
-            .first()
+    existing_paid_by_ref = (
+        db.query(Payment)
+        .filter(
+            Payment.order_id == order.id,
+            Payment.status == "paid",
+            Payment.external_ref == normalized_ref,
         )
-        if order.status == "paid":
-            if existing_paid_by_ref is not None and round(float(existing_paid_by_ref.amount), 2) == received_total:
-                return _payment_to_dict(existing_paid_by_ref)
-            raise ValueError("order already paid with a different payment_ref")
+        .order_by(Payment.created_at.desc(), Payment.id.desc())
+        .first()
+    )
+    if order.status == "paid":
+        if (
+            existing_paid_by_ref is not None
+            and round(float(existing_paid_by_ref.amount), 2) == received_total
+        ):
+            return _payment_to_dict(existing_paid_by_ref)
+        raise ValueError("order already paid with a different payment_ref")
 
-        for item in order.items:
-            variant = item.variant
-            if variant is None:
-                variant = (
-                    session.query(ProductVariant)
-                    .filter(
-                        ProductVariant.id == item.variant_id,
-                        ProductVariant.is_active.is_(True),
-                    )
-                    .with_for_update()
-                    .first()
-                )
-                if variant is None:
-                    raise ValueError(f"variant {item.variant_id} not found")
-            elif not bool(variant.is_active):
-                raise ValueError(f"variant {item.variant_id} not found")
-
-            current_stock = int(variant.stock or 0)
-            if current_stock < int(item.quantity):
-                raise ValueError(f"insufficient stock for variant {item.variant_id}")
-
-        for item in order.items:
+    for item in order.items:
+        variant = item.variant
+        if variant is None:
             variant = (
-                session.query(ProductVariant)
+                db.query(ProductVariant)
                 .filter(
                     ProductVariant.id == item.variant_id,
                     ProductVariant.is_active.is_(True),
@@ -752,93 +706,106 @@ def confirm_manual_payment_for_order(
             )
             if variant is None:
                 raise ValueError(f"variant {item.variant_id} not found")
-            variant.stock = int(variant.stock) - int(item.quantity)
+        elif not bool(variant.is_active):
+            raise ValueError(f"variant {item.variant_id} not found")
 
-        now = datetime.utcnow()
-        payment = existing_paid_by_ref
-        if payment is None:
-            payment = Payment(
-                order_id=order.id,
-                method="bank_transfer",
-                status="paid",
-                amount=received_total,
-                currency=order.currency or "ARS",
-                idempotency_key=_build_manual_payment_idempotency_key(order.id, normalized_ref),
-                external_ref=normalized_ref,
-                provider_status="manual_confirmed",
-                provider_payload=None,
-                receipt_url=None,
-                expires_at=None,
-                paid_at=now,
+        current_stock = int(variant.stock or 0)
+        if current_stock < int(item.quantity):
+            raise ValueError(f"insufficient stock for variant {item.variant_id}")
+
+    for item in order.items:
+        variant = (
+            db.query(ProductVariant)
+            .filter(
+                ProductVariant.id == item.variant_id,
+                ProductVariant.is_active.is_(True),
             )
-            session.add(payment)
-        else:
-            payment.method = payment.method or "bank_transfer"
-            payment.status = "paid"
-            payment.amount = received_total
-            payment.currency = order.currency or payment.currency or "ARS"
-            payment.external_ref = normalized_ref
-            payment.provider_status = "manual_confirmed"
-            payment.paid_at = now
-
-        payment.provider_payload = _serialize_provider_payload(
-            {
-                "manual_confirmation": {
-                    "payment_ref": normalized_ref,
-                    "confirmed_at": now.isoformat() + "Z",
-                }
-            }
+            .with_for_update()
+            .first()
         )
+        if variant is None:
+            raise ValueError(f"variant {item.variant_id} not found")
+        variant.stock = int(variant.stock) - int(item.quantity)
 
-        order.status = "paid"
-        if order.paid_at is None:
-            order.paid_at = now
+    now = datetime.utcnow()
+    payment = existing_paid_by_ref
+    if payment is None:
+        payment = Payment(
+            order_id=order.id,
+            method="bank_transfer",
+            status="paid",
+            amount=received_total,
+            currency=order.currency or "ARS",
+            idempotency_key=_build_manual_payment_idempotency_key(order.id, normalized_ref),
+            external_ref=normalized_ref,
+            provider_status="manual_confirmed",
+            provider_payload=None,
+            receipt_url=None,
+            expires_at=None,
+            paid_at=now,
+        )
+        db.add(payment)
+    else:
+        payment.method = payment.method or "bank_transfer"
+        payment.status = "paid"
+        payment.amount = received_total
+        payment.currency = order.currency or payment.currency or "ARS"
+        payment.external_ref = normalized_ref
+        payment.provider_status = "manual_confirmed"
+        payment.paid_at = now
 
-        session.flush()
-        if owns_session:
-            session.commit()
-        else:
-            session.flush()
-        session.refresh(payment)
-        return _payment_to_dict(payment)
+    payment.provider_payload = _serialize_provider_payload(
+        {
+            "manual_confirmation": {
+                "payment_ref": normalized_ref,
+                "confirmed_at": now.isoformat() + "Z",
+            }
+        }
+    )
+
+    order.status = "paid"
+    if order.paid_at is None:
+        order.paid_at = now
+
+    db.flush()
+    db.refresh(payment)
+    return _payment_to_dict(payment)
 
 
 def list_payments_for_order(
     order_id: int,
     user_id: int,
-    db: Session | None = None,
+    db: Session,
 ) -> list[dict]:
-    with _session_scope(db) as (session, _):
-        order = (
-            session.query(Order)
-            .filter(Order.id == order_id, Order.user_id == user_id)
-            .first()
-        )
-        if order is None:
-            raise LookupError("order not found")
+    order = (
+        db.query(Order)
+        .filter(Order.id == order_id, Order.user_id == user_id)
+        .first()
+    )
+    if order is None:
+        raise LookupError("order not found")
 
-        payments = (
-            session.query(Payment)
-            .filter(Payment.order_id == order_id)
-            .order_by(Payment.created_at.desc(), Payment.id.desc())
-            .all()
-        )
-        return [_payment_to_dict(payment) for payment in payments]
+    payments = (
+        db.query(Payment)
+        .filter(Payment.order_id == order_id)
+        .order_by(Payment.created_at.desc(), Payment.id.desc())
+        .all()
+    )
+    return [_payment_to_dict(payment) for payment in payments]
 
 
 def get_payment_for_user(
     payment_id: int,
     user_id: int,
-    db: Session | None = None,
+    db: Session,
 ) -> dict:
-    with _session_scope(db) as (session, _):
-        payment = (
-            session.query(Payment)
-            .join(Order, Payment.order_id == Order.id)
-            .filter(Payment.id == payment_id, Order.user_id == user_id)
-            .first()
-        )
-        if payment is None:
-            raise LookupError("payment not found")
+    payment = (
+        db.query(Payment)
+        .join(Order, Payment.order_id == Order.id)
+        .filter(Payment.id == payment_id, Order.user_id == user_id)
+        .first()
+    )
+    if payment is None:
+        raise LookupError("payment not found")
 
-        return _payment_to_dict(payment)
+    return _payment_to_dict(payment)

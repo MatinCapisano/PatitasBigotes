@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
-from source.db.session import get_db
+from source.db.session import get_db_transactional
 from source.services.mercadopago_client import resolver_evento_webhook_mercadopago
 
 router = APIRouter()
@@ -15,7 +15,7 @@ def mercadopago_webhook(
     payload: dict,
     x_signature: str | None = Header(default=None, alias="x-signature"),
     x_request_id: str | None = Header(default=None, alias="x-request-id"),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_transactional),
 ):
     result = resolver_evento_webhook_mercadopago(
         payload=payload,
