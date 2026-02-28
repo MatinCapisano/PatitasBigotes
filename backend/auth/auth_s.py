@@ -73,6 +73,8 @@ def authenticate_user(*, email: str, password: str, db: Session) -> User:
         raise LookupError("user not found")
     if not bool(user.is_active):
         raise ValueError("inactive user")
+    if not bool(user.has_account):
+        raise ValueError("user does not have an account yet")
     if not verify_password(password, user.password_hash):
         raise ValueError("invalid credentials")
     return user

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from auth.security import hash_password
 from source.db.models import User
-from source.schemas import CreateGuestUserRequest, CreateUserRequest
+from source.schemas import CreateGuestUserRequest, CreateUserRequest, ResolveUserRequest
 
 
 def _serialize_user_created(user: User) -> dict:
@@ -125,21 +125,40 @@ def get_or_create_user_by_contact(
     first_name: str,
     last_name: str,
     phone: str,
+    dni: str | None = None,
     db: Session,
 ) -> tuple[User, bool]:
     normalized_email = str(email).strip().lower()
     if not normalized_email:
         raise HTTPException(status_code=400, detail="email is required")
+    normalized_dni = _normalize_optional_text(dni)
+    normalized_phone = _normalize_required_text(phone, field_name="phone")
+    normalized_first_name = _normalize_required_text(first_name, field_name="first_name")
+    normalized_last_name = _normalize_required_text(last_name, field_name="last_name")
 
     existing_user = db.query(User).filter(User.email == normalized_email).first()
     if existing_user is not None:
+        if not bool(existing_user.is_active):
+            raise ValueError("user is inactive")
+        if (
+            normalized_dni is not None
+            and existing_user.dni is not None
+            and str(existing_user.dni).strip() != normalized_dni
+        ):
+            raise ValueError("dni does not match existing user")
+        if existing_user.dni is None and normalized_dni is not None:
+            existing_user.dni = normalized_dni
+        if existing_user.phone is None and normalized_phone is not None:
+            existing_user.phone = normalized_phone
+        db.flush()
         return existing_user, False
 
     user = User(
-        first_name=_normalize_required_text(first_name, field_name="first_name"),
-        last_name=_normalize_required_text(last_name, field_name="last_name"),
+        first_name=normalized_first_name,
+        last_name=normalized_last_name,
         email=normalized_email,
-        phone=_normalize_required_text(phone, field_name="phone"),
+        dni=normalized_dni,
+        phone=normalized_phone,
         # Sentinel invalid hash: prevents authentication until account activation flow.
         password_hash="!",
         has_account=False,
@@ -150,6 +169,22 @@ def get_or_create_user_by_contact(
     db.flush()
     db.refresh(user)
     return user, True
+
+
+def resolve_user(payload: ResolveUserRequest, db: Session) -> dict:
+    data = payload.model_dump()
+    user, created = get_or_create_user_by_contact(
+        email=data["email"],
+        first_name=data["first_name"],
+        last_name=data["last_name"],
+        phone=data["phone"],
+        dni=data.get("dni"),
+        db=db,
+    )
+    return {
+        "user": serialize_user_basic(user),
+        "created": created,
+    }
 
 
 def search_users(

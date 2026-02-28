@@ -14,7 +14,11 @@ from source.schemas.products_s import (
     UpdateProductRequest,
 )
 from source.schemas.turns_s import CreateTurnRequest
-from source.schemas.users_s import CreateGuestUserRequest, CreateUserRequest
+from source.schemas.users_s import (
+    CreateGuestUserRequest,
+    CreateUserRequest,
+    ResolveUserRequest,
+)
 
 __all__ = [
     "AddOrderItemRequest",
@@ -23,6 +27,7 @@ __all__ = [
     "PublicGuestCheckoutRequest",
     "CreateUserRequest",
     "CreateGuestUserRequest",
+    "ResolveUserRequest",
     "LoginRequest",
     "UpdateDiscountRequest",
     "CreateDiscountRequest",

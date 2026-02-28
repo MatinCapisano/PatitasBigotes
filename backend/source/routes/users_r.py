@@ -4,11 +4,12 @@ from sqlalchemy.orm import Session
 from source.dependencies.auth_d import require_admin
 from source.db.session import get_db_transactional
 from source.errors import raise_http_error_from_exception
-from source.schemas import CreateGuestUserRequest, CreateUserRequest
+from source.schemas import CreateGuestUserRequest, CreateUserRequest, ResolveUserRequest
 from source.services.users_s import (
     create_guest_user as create_guest_user_service,
 )
 from source.services.users_s import create_user as create_user_service
+from source.services.users_s import resolve_user as resolve_user_service
 from source.services.users_s import search_users as search_users_service
 
 router = APIRouter()
@@ -65,3 +66,17 @@ def search_users(
         raise_http_error_from_exception(exc, db=db)
 
     return {"data": users}
+
+
+@router.post("/users/resolve")
+def resolve_user(
+    payload: ResolveUserRequest,
+    _: dict = Depends(require_admin),
+    db: Session = Depends(get_db_transactional),
+):
+    try:
+        result = resolve_user_service(payload=payload, db=db)
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+
+    return {"data": result}
