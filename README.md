@@ -53,6 +53,28 @@ ALTER TABLE products_new RENAME TO products;
 PRAGMA foreign_keys=on;
 ```
 
+## Webhook inbox migration (MercadoPago idempotency)
+
+Webhook events are now deduplicated with a DB inbox table (`webhook_events`).
+
+### SQL migration
+
+```sql
+CREATE TABLE webhook_events (
+  id INTEGER PRIMARY KEY,
+  provider VARCHAR NOT NULL,
+  event_key VARCHAR NOT NULL UNIQUE,
+  status VARCHAR NOT NULL DEFAULT 'processing',
+  payload TEXT,
+  received_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  processed_at DATETIME,
+  last_error TEXT
+);
+
+CREATE INDEX ix_webhook_events_provider ON webhook_events(provider);
+CREATE UNIQUE INDEX ux_webhook_events_event_key ON webhook_events(event_key);
+```
+
 ## Pagos MP en local (Uvicorn + ngrok fijo)
 
 ### Requisitos
