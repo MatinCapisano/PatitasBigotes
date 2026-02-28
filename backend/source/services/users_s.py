@@ -138,8 +138,25 @@ def get_or_create_user_by_contact(
 
     existing_user = db.query(User).filter(User.email == normalized_email).first()
     if existing_user is not None:
-        if not bool(existing_user.is_active):
-            raise ValueError("user is inactive")
+        existing_first_name = str(existing_user.first_name or "").strip().lower()
+        existing_last_name = str(existing_user.last_name or "").strip().lower()
+        existing_phone = _normalize_optional_text(existing_user.phone)
+
+        if existing_first_name and existing_first_name != normalized_first_name.lower():
+            raise HTTPException(
+                status_code=409,
+                detail="contact data does not match existing user for this email",
+            )
+        if existing_last_name and existing_last_name != normalized_last_name.lower():
+            raise HTTPException(
+                status_code=409,
+                detail="contact data does not match existing user for this email",
+            )
+        if existing_phone is not None and existing_phone != normalized_phone:
+            raise HTTPException(
+                status_code=409,
+                detail="contact data does not match existing user for this email",
+            )
         if (
             normalized_dni is not None
             and existing_user.dni is not None

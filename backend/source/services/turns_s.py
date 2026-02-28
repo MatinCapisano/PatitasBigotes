@@ -42,7 +42,7 @@ def create_turn_for_user(
     with _session_scope(db) as (session, owns_session):
         user = (
             session.query(User)
-            .filter(User.id == user_id, User.is_active.is_(True))
+            .filter(User.id == user_id)
             .first()
         )
         if user is None:

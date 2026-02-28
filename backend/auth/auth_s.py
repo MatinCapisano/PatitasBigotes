@@ -71,8 +71,6 @@ def authenticate_user(*, email: str, password: str, db: Session) -> User:
     user = db.query(User).filter(User.email == normalized_email).first()
     if user is None:
         raise LookupError("user not found")
-    if not bool(user.is_active):
-        raise ValueError("inactive user")
     if not bool(user.has_account):
         raise ValueError("user does not have an account yet")
     if not verify_password(password, user.password_hash):
@@ -129,7 +127,7 @@ def refresh_with_token(*, refresh_token: str, db: Session) -> dict:
         raise ValueError("invalid refresh token")
 
     user = db.query(User).filter(User.id == user_id).first()
-    if user is None or not bool(user.is_active):
+    if user is None:
         raise LookupError("user not found")
 
     return issue_token_pair(user=user, db=db)
@@ -138,10 +136,24 @@ def refresh_with_token(*, refresh_token: str, db: Session) -> dict:
 def logout_with_refresh_token(*, refresh_token: str, db: Session) -> None:
     refresh_claims = decode_refresh_token(refresh_token)
     user_id = parsear_sub_a_user_id(refresh_claims.get("sub"))
+    token_jti = str(refresh_claims.get("jti", "")).strip()
+    if not token_jti:
+        raise ValueError("Invalid refresh token id")
+
     session_row = (
         db.query(UserRefreshSession)
         .filter(UserRefreshSession.user_id == user_id)
         .first()
     )
-    if session_row is not None:
-        db.delete(session_row)
+    if session_row is None:
+        raise ValueError("invalid refresh token")
+
+    now = datetime.now(timezone.utc)
+    if session_row.expires_at.replace(tzinfo=timezone.utc) <= now:
+        raise ValueError("expired refresh token")
+    if session_row.token_hash != hash_refresh_token(refresh_token):
+        raise ValueError("invalid refresh token")
+    if session_row.token_jti != token_jti:
+        raise ValueError("invalid refresh token")
+
+    db.delete(session_row)

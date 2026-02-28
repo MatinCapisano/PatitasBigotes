@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from source.dependencies.auth_d import require_admin
-from source.db.session import get_db
+from source.db.session import get_db_transactional
 from source.errors import raise_http_error_from_exception
 from source.schemas import CreateDiscountRequest, UpdateDiscountRequest
 from source.services.discount_s import (
@@ -18,10 +18,10 @@ router = APIRouter()
 @router.get("/discounts")
 def get_discounts(
     _: dict = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_transactional),
 ):
     try:
-        return {"data": list_discounts()}
+        return {"data": list_discounts(db=db)}
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
 
@@ -30,10 +30,10 @@ def get_discounts(
 def post_discount(
     payload: CreateDiscountRequest,
     _: dict = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_transactional),
 ):
     try:
-        discount = create_discount(payload.model_dump())
+        discount = create_discount(payload.model_dump(), db=db)
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
 
@@ -45,11 +45,11 @@ def patch_discount(
     discount_id: int,
     payload: UpdateDiscountRequest,
     _: dict = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_transactional),
 ):
     updates = payload.model_dump(exclude_none=True)
     try:
-        discount = update_discount(discount_id=discount_id, updates=updates)
+        discount = update_discount(discount_id=discount_id, updates=updates, db=db)
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
 
@@ -63,10 +63,10 @@ def patch_discount(
 def remove_discount(
     discount_id: int,
     _: dict = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_transactional),
 ):
     try:
-        discount = delete_discount(discount_id=discount_id)
+        discount = delete_discount(discount_id=discount_id, db=db)
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
     if discount is None:

@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 from datetime import datetime
 from typing import Iterable, TypedDict
 
 from sqlalchemy import insert
 from sqlalchemy.orm import Session, joinedload
 
-from source.db.models import Discount, DiscountProduct, Product
-from source.db.session import SessionLocal
+from source.db.models import Category, Discount, DiscountProduct, Product
 
 ALLOWED_DISCOUNT_TYPES = {"percent", "fixed"}
 ALLOWED_DISCOUNT_SCOPES = {"all", "category", "product", "product_list"}
@@ -25,17 +23,6 @@ class DiscountDTO(TypedDict):
     starts_at: datetime | None
     ends_at: datetime | None
     product_ids: list[int]
-
-
-@contextmanager
-def _session_scope(db: Session | None):
-    owns_session = db is None
-    session = db or SessionLocal()
-    try:
-        yield session, owns_session
-    finally:
-        if owns_session:
-            session.close()
 
 
 def _coerce_datetime(value) -> datetime | None:
@@ -65,28 +52,26 @@ def _discount_to_dict(discount: Discount) -> DiscountDTO:
     }
 
 
-def list_discounts(db: Session | None = None) -> list[DiscountDTO]:
-    with _session_scope(db) as (session, _):
-        discounts = (
-            session.query(Discount)
-            .options(joinedload(Discount.product_links))
-            .order_by(Discount.id.asc())
-            .all()
-        )
-        return [_discount_to_dict(discount) for discount in discounts]
+def list_discounts(db: Session) -> list[DiscountDTO]:
+    discounts = (
+        db.query(Discount)
+        .options(joinedload(Discount.product_links))
+        .order_by(Discount.id.asc())
+        .all()
+    )
+    return [_discount_to_dict(discount) for discount in discounts]
 
 
-def get_discount_by_id(discount_id: int, db: Session | None = None) -> DiscountDTO | None:
-    with _session_scope(db) as (session, _):
-        discount = (
-            session.query(Discount)
-            .options(joinedload(Discount.product_links))
-            .filter(Discount.id == discount_id)
-            .first()
-        )
-        if discount is None:
-            return None
-        return _discount_to_dict(discount)
+def get_discount_by_id(discount_id: int, db: Session) -> DiscountDTO | None:
+    discount = (
+        db.query(Discount)
+        .options(joinedload(Discount.product_links))
+        .filter(Discount.id == discount_id)
+        .first()
+    )
+    if discount is None:
+        return None
+    return _discount_to_dict(discount)
 
 
 def _set_discount_product_list(db: Session, discount: Discount, product_ids: list[int]) -> None:
@@ -108,102 +93,95 @@ def _set_discount_product_list(db: Session, discount: Discount, product_ids: lis
         db.execute(insert(DiscountProduct), rows)
 
 
-def create_discount(payload: dict, db: Session | None = None) -> DiscountDTO:
-    _validate_discount_payload(payload)
+def create_discount(payload: dict, db: Session) -> DiscountDTO:
+    _validate_discount_payload(payload, db=db)
 
-    with _session_scope(db) as (session, owns_session):
-        discount = Discount(
-            name=payload["name"],
-            type=payload["type"],
-            value=float(payload["value"]),
-            scope=payload["scope"],
-            scope_value=payload.get("scope_value"),
-            is_active=bool(payload.get("is_active", True)),
-            starts_at=_coerce_datetime(payload.get("starts_at")),
-            ends_at=_coerce_datetime(payload.get("ends_at")),
+    discount = Discount(
+        name=payload["name"],
+        type=payload["type"],
+        value=float(payload["value"]),
+        scope=payload["scope"],
+        scope_value=payload.get("scope_value"),
+        is_active=bool(payload.get("is_active", True)),
+        starts_at=_coerce_datetime(payload.get("starts_at")),
+        ends_at=_coerce_datetime(payload.get("ends_at")),
+    )
+    db.add(discount)
+    db.flush()
+
+    if discount.scope == "product_list":
+        _set_discount_product_list(
+            db=db,
+            discount=discount,
+            product_ids=payload.get("product_ids", []),
         )
-        session.add(discount)
-        session.flush()
 
-        if discount.scope == "product_list":
-            _set_discount_product_list(
-                db=session,
-                discount=discount,
-                product_ids=payload.get("product_ids", []),
-            )
-
-        if owns_session:
-            session.commit()
-        else:
-            session.flush()
-        session.refresh(discount)
-        return get_discount_by_id(discount.id, db=session)
+    db.flush()
+    db.refresh(discount)
+    result = get_discount_by_id(discount.id, db=db)
+    if result is None:
+        raise LookupError("discount not found")
+    return result
 
 
-def update_discount(discount_id: int, updates: dict, db: Session | None = None) -> DiscountDTO | None:
-    with _session_scope(db) as (session, owns_session):
-        discount = session.query(Discount).filter(Discount.id == discount_id).first()
-        if discount is None:
-            return None
+def update_discount(discount_id: int, updates: dict, db: Session) -> DiscountDTO | None:
+    discount = db.query(Discount).filter(Discount.id == discount_id).first()
+    if discount is None:
+        return None
 
-        current = get_discount_by_id(discount_id=discount_id, db=session)
-        if current is None:
-            return None
+    current = get_discount_by_id(discount_id=discount_id, db=db)
+    if current is None:
+        return None
 
-        merged = {**current, **updates}
-        _validate_discount_payload(merged)
+    merged = {**current, **updates}
+    _validate_discount_payload(merged, db=db)
 
-        discount.name = merged["name"]
-        discount.type = merged["type"]
-        discount.value = float(merged["value"])
-        discount.scope = merged["scope"]
-        discount.scope_value = merged.get("scope_value")
-        discount.is_active = bool(merged.get("is_active", True))
-        discount.starts_at = _coerce_datetime(merged.get("starts_at"))
-        discount.ends_at = _coerce_datetime(merged.get("ends_at"))
+    discount.name = merged["name"]
+    discount.type = merged["type"]
+    discount.value = float(merged["value"])
+    discount.scope = merged["scope"]
+    discount.scope_value = merged.get("scope_value")
+    discount.is_active = bool(merged.get("is_active", True))
+    discount.starts_at = _coerce_datetime(merged.get("starts_at"))
+    discount.ends_at = _coerce_datetime(merged.get("ends_at"))
 
-        if merged["scope"] == "product_list":
-            _set_discount_product_list(
-                db=session,
-                discount=discount,
-                product_ids=merged.get("product_ids", []),
-            )
-        else:
-            session.query(DiscountProduct).filter(DiscountProduct.discount_id == discount.id).delete()
-
-        if owns_session:
-            session.commit()
-        else:
-            session.flush()
-        session.refresh(discount)
-        return get_discount_by_id(discount_id, db=session)
-
-
-def delete_discount(discount_id: int, db: Session | None = None) -> DiscountDTO | None:
-    with _session_scope(db) as (session, owns_session):
-        discount = (
-            session.query(Discount)
-            .options(joinedload(Discount.product_links))
-            .filter(Discount.id == discount_id)
-            .first()
+    if merged["scope"] == "product_list":
+        _set_discount_product_list(
+            db=db,
+            discount=discount,
+            product_ids=merged.get("product_ids", []),
         )
-        if discount is None:
-            return None
-        serialized = _discount_to_dict(discount)
-        session.delete(discount)
-        if owns_session:
-            session.commit()
-        else:
-            session.flush()
-        return serialized
+    else:
+        db.query(DiscountProduct).filter(DiscountProduct.discount_id == discount.id).delete()
+
+    db.flush()
+    db.refresh(discount)
+    return get_discount_by_id(discount_id, db=db)
 
 
-def _validate_discount_payload(payload: dict) -> None:
+def delete_discount(discount_id: int, db: Session) -> DiscountDTO | None:
+    discount = (
+        db.query(Discount)
+        .options(joinedload(Discount.product_links))
+        .filter(Discount.id == discount_id)
+        .first()
+    )
+    if discount is None:
+        return None
+    serialized = _discount_to_dict(discount)
+    db.delete(discount)
+    db.flush()
+    return serialized
+
+
+def _validate_discount_payload(payload: dict, *, db: Session) -> None:
     discount_type = payload.get("type")
     scope = payload.get("scope")
     value = payload.get("value")
     scope_value = payload.get("scope_value")
     product_ids = payload.get("product_ids", [])
+    starts_at = _coerce_datetime(payload.get("starts_at"))
+    ends_at = _coerce_datetime(payload.get("ends_at"))
 
     if discount_type not in ALLOWED_DISCOUNT_TYPES:
         raise ValueError("invalid discount type")
@@ -213,11 +191,29 @@ def _validate_discount_payload(payload: dict) -> None:
         raise ValueError("discount value must be greater than 0")
     if discount_type == "percent" and float(value) > 100:
         raise ValueError("percent discount cannot exceed 100")
+    if starts_at is not None and ends_at is not None and starts_at > ends_at:
+        raise ValueError("starts_at must be before or equal to ends_at")
 
     if scope == "all" and scope_value is not None:
         raise ValueError("scope_value must be null for all scope")
     if scope in {"category", "product"} and scope_value is None:
         raise ValueError("scope_value is required for category/product scope")
+    if scope == "category" and scope_value is not None:
+        exists = (
+            db.query(Category.id)
+            .filter(Category.id == int(scope_value))
+            .first()
+        )
+        if exists is None:
+            raise ValueError("category in scope_value does not exist")
+    if scope == "product" and scope_value is not None:
+        exists = (
+            db.query(Product.id)
+            .filter(Product.id == int(scope_value))
+            .first()
+        )
+        if exists is None:
+            raise ValueError("product in scope_value does not exist")
     if scope == "product_list":
         if scope_value is not None:
             raise ValueError("scope_value must be null for product_list scope")

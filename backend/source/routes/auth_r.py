@@ -28,6 +28,11 @@ def login(
             db=db,
         )
         tokens = issue_token_pair(user=user, db=db)
+    except (LookupError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid credentials",
+        )
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
     return {"data": tokens}

@@ -8,7 +8,6 @@ from jose import ExpiredSignatureError, JWTError, jwt
 from passlib.context import CryptContext
 from passlib.exc import UnknownHashError
 
-DEFAULT_SECRET_KEY = "CAMBIAR_ESTO_EN_PRODUCCION"
 DEFAULT_ALGORITHM = "HS256"
 DEFAULT_ACCESS_TOKEN_EXPIRE_MINUTES = 120
 DEFAULT_REFRESH_TOKEN_EXPIRE_DAYS = 30
@@ -32,7 +31,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def obtener_config_jwt() -> dict:
-    secret_key = os.getenv("JWT_SECRET", DEFAULT_SECRET_KEY).strip()
+    secret_key = os.getenv("JWT_SECRET", "").strip()
     algorithm = os.getenv("JWT_ALGORITHM", DEFAULT_ALGORITHM).strip()
     issuer = os.getenv("JWT_ISSUER", DEFAULT_JWT_ISSUER).strip()
     raw_access_minutes = os.getenv(
