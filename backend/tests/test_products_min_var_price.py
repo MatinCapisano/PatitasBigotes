@@ -23,7 +23,6 @@ class ProductsMinVarPriceTests(unittest.TestCase):
             bind=cls.engine,
         )
         Base.metadata.create_all(bind=cls.engine)
-        products_s.SessionLocal = cls.TestSession
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -41,14 +40,20 @@ class ProductsMinVarPriceTests(unittest.TestCase):
             session.close()
 
     def test_create_product_without_price_and_without_variants(self) -> None:
-        product = products_s.create_product(
-            {
-                "name": "Producto sin variantes",
-                "description": "demo",
-                "category": "cat",
-                "active": True,
-            }
-        )
+        session = self.TestSession()
+        try:
+            product = products_s.create_product(
+                {
+                    "name": "Producto sin variantes",
+                    "description": "demo",
+                    "category": "cat",
+                    "active": True,
+                },
+                db=session,
+            )
+            session.commit()
+        finally:
+            session.close()
         self.assertIn("min_var_price", product)
         self.assertIsNone(product["min_var_price"])
 
@@ -94,7 +99,11 @@ class ProductsMinVarPriceTests(unittest.TestCase):
         finally:
             session.close()
 
-        payload = products_s.get_product_by_id(product_id)
+        session = self.TestSession()
+        try:
+            payload = products_s.get_product_by_id(product_id, db=session)
+        finally:
+            session.close()
         self.assertIsNotNone(payload)
         assert payload is not None
         self.assertEqual(payload["min_var_price"], 900.0)
@@ -132,7 +141,11 @@ class ProductsMinVarPriceTests(unittest.TestCase):
         finally:
             session.close()
 
-        data = products_s.filter_and_sort_products(min_price=1000)
+        session = self.TestSession()
+        try:
+            data = products_s.filter_and_sort_products(min_price=1000, db=session)
+        finally:
+            session.close()
         names = [product["name"] for product in data]
         self.assertEqual(names, ["P2"])
 
@@ -169,7 +182,15 @@ class ProductsMinVarPriceTests(unittest.TestCase):
         finally:
             session.close()
 
-        data = products_s.filter_and_sort_products(sort_by="price", sort_order="asc")
+        session = self.TestSession()
+        try:
+            data = products_s.filter_and_sort_products(
+                sort_by="price",
+                sort_order="asc",
+                db=session,
+            )
+        finally:
+            session.close()
         names = [product["name"] for product in data if product["min_var_price"] is not None]
         self.assertEqual(names[:2], ["P2", "P1"])
 

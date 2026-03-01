@@ -11,7 +11,7 @@ from source.db.session import SessionLocal
 
 
 @contextmanager
-def _session_scope(db: Session | None):
+def _read_session_scope(db: Session | None):
     owns_session = db is None
     session = db or SessionLocal()
     try:
@@ -19,6 +19,13 @@ def _session_scope(db: Session | None):
     finally:
         if owns_session:
             session.close()
+
+
+@contextmanager
+def _write_session_scope(db: Session):
+    if db is None:
+        raise RuntimeError("db session is required for mutating operations")
+    yield db, False
 
 
 def _product_inventory(product: Product) -> tuple[int, int]:
@@ -69,7 +76,7 @@ def filter_and_sort_products(
     sort_by: Literal["price", "name"] | None = None,
     sort_order: Literal["asc", "desc"] = "asc",
 ) -> list[dict]:
-    with _session_scope(db) as (session, _):
+    with _read_session_scope(db) as (session, _):
         min_price_subquery = (
             session.query(
                 ProductVariant.product_id.label("product_id"),
@@ -105,7 +112,7 @@ def filter_and_sort_products(
 
 
 def get_product_by_id(product_id: int, db: Session | None = None) -> dict | None:
-    with _session_scope(db) as (session, _):
+    with _read_session_scope(db) as (session, _):
         product = (
             session.query(Product)
             .options(joinedload(Product.category), joinedload(Product.variants))
@@ -117,9 +124,9 @@ def get_product_by_id(product_id: int, db: Session | None = None) -> dict | None
         return _product_to_dict(product)
 
 
-def update_product(product_id: int, updates: dict, db: Session | None = None) -> dict | None:
+def update_product(product_id: int, updates: dict, db: Session) -> dict | None:
     allowed_fields = {"name", "description", "category", "active"}
-    with _session_scope(db) as (session, owns_session):
+    with _write_session_scope(db) as (session, _):
         product = (
             session.query(Product)
             .options(joinedload(Product.category), joinedload(Product.variants))
@@ -149,13 +156,11 @@ def update_product(product_id: int, updates: dict, db: Session | None = None) ->
                 setattr(product, field, value)
 
         session.flush()
-        if owns_session:
-            session.commit()
         session.refresh(product)
         return _product_to_dict(product)
 
 
-def create_product(payload: dict, db: Session | None = None) -> dict:
+def create_product(payload: dict, db: Session) -> dict:
     name = str(payload.get("name", "")).strip()
     if not name:
         raise ValueError("name is required")
@@ -167,7 +172,7 @@ def create_product(payload: dict, db: Session | None = None) -> dict:
     description = payload.get("description")
     normalized_description = None if description is None else str(description).strip() or None
 
-    with _session_scope(db) as (session, owns_session):
+    with _write_session_scope(db) as (session, _):
         category = session.query(Category).filter(Category.name == category_name).first()
         if category is None:
             raise ValueError("category not found")
@@ -180,14 +185,12 @@ def create_product(payload: dict, db: Session | None = None) -> dict:
         session.add(product)
         session.flush()
 
-        if owns_session:
-            session.commit()
         session.refresh(product)
         return _product_to_dict(product)
 
 
-def delete_product_hard(product_id: int, db: Session | None = None) -> dict | None:
-    with _session_scope(db) as (session, owns_session):
+def delete_product_hard(product_id: int, db: Session) -> dict | None:
+    with _write_session_scope(db) as (session, _):
         product = (
             session.query(Product)
             .options(joinedload(Product.category), joinedload(Product.variants))
@@ -200,21 +203,19 @@ def delete_product_hard(product_id: int, db: Session | None = None) -> dict | No
         product_data = _product_to_dict(product)
         session.delete(product)
         session.flush()
-        if owns_session:
-            session.commit()
         return product_data
 
 
-def deactivate_product(product_id: int, db: Session | None = None) -> dict | None:
+def deactivate_product(product_id: int, db: Session) -> dict | None:
     return update_product(product_id=product_id, updates={"active": 0}, db=db)
 
 
-def activate_product(product_id: int, db: Session | None = None) -> dict | None:
+def activate_product(product_id: int, db: Session) -> dict | None:
     return update_product(product_id=product_id, updates={"active": 1}, db=db)
 
 
 def ensure_product_has_variant(product_id: int, db: Session | None = None) -> list[dict]:
-    with _session_scope(db) as (session, _):
+    with _read_session_scope(db) as (session, _):
         product = (
             session.query(Product)
             .options(joinedload(Product.variants))
@@ -231,18 +232,16 @@ def ensure_product_has_variant(product_id: int, db: Session | None = None) -> li
         raise LookupError("product has no active variants")
 
 
-def add_stock(product_id: int, quantity: int, db: Session | None = None) -> dict:
+def add_stock(product_id: int, quantity: int, db: Session) -> dict:
     if quantity <= 0:
         raise ValueError("quantity must be greater than 0")
 
-    with _session_scope(db) as (session, owns_session):
+    with _write_session_scope(db) as (session, _):
         variants = ensure_product_has_variant(product_id=product_id, db=session)
         if not variants:
             raise ValueError("product has no active variants")
 
         add_variant_stock(variant_id=variants[0]["id"], quantity=quantity, db=session)
-        if owns_session:
-            session.commit()
 
         product = get_product_by_id(product_id=product_id, db=session)
         if product is None:
@@ -250,11 +249,11 @@ def add_stock(product_id: int, quantity: int, db: Session | None = None) -> dict
         return product
 
 
-def decrement_stock(product_id: int, quantity: int, db: Session | None = None) -> dict:
+def decrement_stock(product_id: int, quantity: int, db: Session) -> dict:
     if quantity <= 0:
         raise ValueError("quantity must be greater than 0")
 
-    with _session_scope(db) as (session, owns_session):
+    with _write_session_scope(db) as (session, _):
         product = (
             session.query(Product)
             .options(joinedload(Product.variants), joinedload(Product.category))
@@ -281,14 +280,12 @@ def decrement_stock(product_id: int, quantity: int, db: Session | None = None) -
             remaining -= taken
 
         session.flush()
-        if owns_session:
-            session.commit()
 
         return _product_to_dict(product)
 
 
 def get_variant_by_id(variant_id: int, db: Session | None = None) -> dict | None:
-    with _session_scope(db) as (session, _):
+    with _read_session_scope(db) as (session, _):
         variant = (
             session.query(ProductVariant)
             .options(joinedload(ProductVariant.product).joinedload(Product.category))
@@ -301,7 +298,7 @@ def get_variant_by_id(variant_id: int, db: Session | None = None) -> dict | None
 
 
 def list_variants_by_product_id(product_id: int, db: Session | None = None) -> list[dict]:
-    with _session_scope(db) as (session, _):
+    with _read_session_scope(db) as (session, _):
         variants = (
             session.query(ProductVariant)
             .filter(
@@ -314,11 +311,11 @@ def list_variants_by_product_id(product_id: int, db: Session | None = None) -> l
         return [_variant_to_dict(variant) for variant in variants]
 
 
-def add_variant_stock(variant_id: int, quantity: int, db: Session | None = None) -> dict:
+def add_variant_stock(variant_id: int, quantity: int, db: Session) -> dict:
     if quantity <= 0:
         raise ValueError("quantity must be greater than 0")
 
-    with _session_scope(db) as (session, owns_session):
+    with _write_session_scope(db) as (session, _):
         variant = (
             session.query(ProductVariant)
             .filter(ProductVariant.id == variant_id, ProductVariant.is_active.is_(True))
@@ -329,16 +326,14 @@ def add_variant_stock(variant_id: int, quantity: int, db: Session | None = None)
 
         variant.stock = int(variant.stock) + quantity
         session.flush()
-        if owns_session:
-            session.commit()
         return _variant_to_dict(variant)
 
 
-def decrement_variant_stock(variant_id: int, quantity: int, db: Session | None = None) -> dict:
+def decrement_variant_stock(variant_id: int, quantity: int, db: Session) -> dict:
     if quantity <= 0:
         raise ValueError("quantity must be greater than 0")
 
-    with _session_scope(db) as (session, owns_session):
+    with _write_session_scope(db) as (session, _):
         variant = (
             session.query(ProductVariant)
             .filter(ProductVariant.id == variant_id, ProductVariant.is_active.is_(True))
@@ -353,6 +348,4 @@ def decrement_variant_stock(variant_id: int, quantity: int, db: Session | None =
 
         variant.stock = current_stock - quantity
         session.flush()
-        if owns_session:
-            session.commit()
         return _variant_to_dict(variant)
