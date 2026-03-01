@@ -316,6 +316,7 @@ class StockReservation(Base):
     )
     quantity = Column(Integer, nullable=False)
     status = Column(String, nullable=False, default="active")
+    reactivation_count = Column(Integer, nullable=False, default=0)
     expires_at = Column(DateTime, nullable=False, index=True)
     consumed_at = Column(DateTime, nullable=True)
     released_at = Column(DateTime, nullable=True)

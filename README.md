@@ -78,6 +78,9 @@ CREATE UNIQUE INDEX ux_webhook_events_event_key ON webhook_events(event_key);
 ## Stock reservations migration (orders submitted)
 
 Stock reservations reserve inventory on `submitted`, consume on `paid`, and expire after 42 hours.
+When a `submitted` reservation expires:
+1. it can be reactivated only once for 12 hours (`reactivation_count=1`) if stock still exists,
+2. after that second expiration (or if stock is missing), the order is cancelled.
 
 ### SQL migration
 
@@ -89,6 +92,7 @@ CREATE TABLE stock_reservations (
   variant_id INTEGER NOT NULL REFERENCES product_variants(id) ON DELETE RESTRICT,
   quantity INTEGER NOT NULL,
   status VARCHAR NOT NULL DEFAULT 'active',
+  reactivation_count INTEGER NOT NULL DEFAULT 0,
   expires_at TIMESTAMP NOT NULL,
   consumed_at TIMESTAMP NULL,
   released_at TIMESTAMP NULL,
@@ -113,6 +117,13 @@ CREATE UNIQUE INDEX uq_stock_reservation_active_per_item
 
 ```sql
 SELECT status, COUNT(*) FROM stock_reservations GROUP BY status ORDER BY status;
+```
+
+If `stock_reservations` already exists, add the new column:
+
+```sql
+ALTER TABLE stock_reservations
+ADD COLUMN reactivation_count INTEGER NOT NULL DEFAULT 0;
 ```
 
 ## Pagos MP en local (Uvicorn + ngrok fijo)

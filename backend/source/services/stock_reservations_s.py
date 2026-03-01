@@ -5,9 +5,11 @@ from datetime import datetime, timedelta
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from source.db.models import Order, OrderItem, ProductVariant, StockReservation
+from source.db.models import Order, OrderItem, Payment, ProductVariant, StockReservation
 
 RESERVATION_TTL_HOURS = 42
+RESERVATION_REACTIVATION_TTL_HOURS = 12
+MAX_RESERVATION_REACTIVATIONS = 1
 RESERVATION_ACTIVE = "active"
 RESERVATION_CONSUMED = "consumed"
 RESERVATION_RELEASED = "released"
@@ -22,6 +24,7 @@ def _reservation_to_dict(reservation: StockReservation) -> dict:
         "variant_id": reservation.variant_id,
         "quantity": int(reservation.quantity),
         "status": reservation.status,
+        "reactivation_count": int(reservation.reactivation_count or 0),
         "expires_at": reservation.expires_at,
         "consumed_at": reservation.consumed_at,
         "released_at": reservation.released_at,
@@ -91,25 +94,95 @@ def _available_stock_for_variant(
     return variant, max(0, available)
 
 
+def _cancel_pending_payments_for_order(order_id: int, *, now: datetime, db: Session) -> None:
+    db.query(Payment).filter(
+        Payment.order_id == order_id,
+        Payment.status == "pending",
+    ).update(
+        {
+            Payment.status: "cancelled",
+            Payment.provider_status: "order_cancelled_reservation_expired",
+            Payment.updated_at: now,
+        },
+        synchronize_session=False,
+    )
+
+
 def expire_active_reservations(now: datetime, db: Session) -> int:
-    expired_count = (
+    expiring_reservations = (
         db.query(StockReservation)
         .filter(
             StockReservation.status == RESERVATION_ACTIVE,
             StockReservation.expires_at <= now,
         )
-        .update(
-            {
-                StockReservation.status: RESERVATION_EXPIRED,
-                StockReservation.released_at: now,
-                StockReservation.reason: "reservation_expired",
-            },
-            synchronize_session=False,
-        )
+        .order_by(StockReservation.order_id.asc(), StockReservation.id.asc())
+        .with_for_update()
+        .all()
     )
-    if expired_count:
-        db.flush()
-    return int(expired_count or 0)
+    if not expiring_reservations:
+        return 0
+
+    expired_count = 0
+    reservations_by_order: dict[int, list[StockReservation]] = {}
+    for reservation in expiring_reservations:
+        reservations_by_order.setdefault(int(reservation.order_id), []).append(reservation)
+
+    for order_id, reservations in reservations_by_order.items():
+        order, items = _lock_order_items_for_order(order_id=order_id, db=db)
+
+        for reservation in reservations:
+            reservation.status = RESERVATION_EXPIRED
+            reservation.released_at = now
+            reservation.reason = "reservation_expired"
+
+        if order.status != "submitted":
+            expired_count += len(reservations)
+            continue
+
+        can_reactivate_by_policy = all(
+            int(reservation.reactivation_count or 0) < MAX_RESERVATION_REACTIVATIONS
+            for reservation in reservations
+        )
+        if not can_reactivate_by_policy:
+            if order.status != "cancelled":
+                order.status = "cancelled"
+            if order.cancelled_at is None:
+                order.cancelled_at = now
+            _cancel_pending_payments_for_order(order_id=order_id, now=now, db=db)
+            expired_count += len(reservations)
+            continue
+
+        can_reactivate_all = True
+        for item in items:
+            _, available = _available_stock_for_variant(
+                variant_id=int(item.variant_id),
+                db=db,
+                now=now,
+            )
+            if available < int(item.quantity):
+                can_reactivate_all = False
+                break
+
+        if can_reactivate_all:
+            renewed_expires_at = now + timedelta(hours=RESERVATION_REACTIVATION_TTL_HOURS)
+            for reservation in reservations:
+                reservation.status = RESERVATION_ACTIVE
+                reservation.reactivation_count = int(reservation.reactivation_count or 0) + 1
+                reservation.expires_at = renewed_expires_at
+                reservation.released_at = None
+                reservation.consumed_at = None
+                reservation.reason = None
+            continue
+
+        if order.status != "cancelled":
+            order.status = "cancelled"
+        if order.cancelled_at is None:
+            order.cancelled_at = now
+        _cancel_pending_payments_for_order(order_id=order_id, now=now, db=db)
+        expired_count += len(reservations)
+
+    db.flush()
+    return int(expired_count)
 
 
 def reserve_stock_for_submitted_order(order_id: int, db: Session) -> list[dict]:
@@ -155,6 +228,7 @@ def reserve_stock_for_submitted_order(order_id: int, db: Session) -> list[dict]:
                 variant_id=int(item.variant_id),
                 quantity=int(item.quantity),
                 status=RESERVATION_ACTIVE,
+                reactivation_count=0,
                 expires_at=expires_at,
                 reason=None,
             )
