@@ -12,6 +12,12 @@ from source.services.discount_s import (
 )
 from source.services.payment_s import confirm_manual_payment_for_order
 from source.services.products_s import get_product_by_id
+from source.services.stock_reservations_s import (
+    expire_active_reservations,
+    list_reservations_for_order,
+    release_reservations_for_cancelled_order,
+    reserve_stock_for_submitted_order,
+)
 from source.services.users_s import get_or_create_user_by_contact, serialize_user_basic
 
 ALLOWED_ORDER_STATUS = {"draft", "submitted", "paid", "cancelled"}
@@ -299,6 +305,8 @@ def change_order_status(
     payment_ref: str | None = None,
     paid_amount: float | None = None,
 ) -> dict:
+    expire_active_reservations(now=_utc_now(), db=db)
+
     if new_status not in ALLOWED_ORDER_STATUS:
         raise ValueError("invalid status")
 
@@ -349,14 +357,21 @@ def change_order_status(
     if order.status == "draft" and new_status == "submitted":
         _recalculate_order_total(order, db=db, force=True)
         validate_order_pricing_before_submit(_order_to_dict(order))
+        reserve_stock_for_submitted_order(order_id=order.id, db=db)
         order.pricing_frozen = True
         if order.pricing_frozen_at is None:
             order.pricing_frozen_at = _utc_now()
         if order.submitted_at is None:
             order.submitted_at = _utc_now()
 
-    if new_status == "cancelled" and order.cancelled_at is None:
-        order.cancelled_at = _utc_now()
+    if new_status == "cancelled":
+        release_reservations_for_cancelled_order(
+            order_id=order.id,
+            reason="order_cancelled",
+            db=db,
+        )
+        if order.cancelled_at is None:
+            order.cancelled_at = _utc_now()
 
     order.status = new_status
     db.flush()
@@ -462,6 +477,7 @@ def create_manual_submitted_order(
     db.refresh(order)
     _recalculate_order_total(order, db=db, force=True)
     validate_order_pricing_before_submit(_order_to_dict(order))
+    reserve_stock_for_submitted_order(order_id=order.id, db=db)
     order.pricing_frozen = True
     if order.pricing_frozen_at is None:
         order.pricing_frozen_at = _utc_now()
@@ -476,3 +492,20 @@ def create_manual_submitted_order(
         "order": _order_to_dict(order),
         "meta": {"user_created": user_created},
     }
+
+
+def get_order_reservations_for_user(
+    *,
+    user_id: int,
+    order_id: int,
+    is_admin: bool,
+    db: Session,
+) -> list[dict]:
+    expire_active_reservations(now=_utc_now(), db=db)
+    query = _order_query(db).filter(Order.id == order_id)
+    if not is_admin:
+        query = query.filter(Order.user_id == user_id)
+    order = query.first()
+    if order is None:
+        raise LookupError("order not found")
+    return list_reservations_for_order(order_id=order.id, db=db)

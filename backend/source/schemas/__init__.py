@@ -13,6 +13,10 @@ from source.schemas.products_s import (
     PatchProductRequest,
     UpdateProductRequest,
 )
+from source.schemas.stock_reservations_s import (
+    ExpireReservationsResponse,
+    ReservationResponse,
+)
 from source.schemas.turns_s import CreateTurnRequest
 from source.schemas.users_s import (
     CreateGuestUserRequest,
@@ -37,4 +41,6 @@ __all__ = [
     "UpdateProductRequest",
     "PatchProductRequest",
     "CreateTurnRequest",
+    "ReservationResponse",
+    "ExpireReservationsResponse",
 ]

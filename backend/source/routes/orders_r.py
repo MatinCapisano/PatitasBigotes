@@ -16,6 +16,7 @@ from source.services.orders_s import (
     add_item_to_draft_order,
     change_order_status,
     create_manual_submitted_order,
+    get_order_reservations_for_user,
     get_or_create_draft_order,
     get_order_for_user,
     pay_order,
@@ -243,3 +244,23 @@ def list_order_payments(
         raise_http_error_from_exception(exc, db=db)
 
     return {"data": payments}
+
+
+@router.get("/orders/{order_id}/reservations")
+def list_order_reservations(
+    order_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db_transactional),
+):
+    user_id = get_current_user_id(current_user)
+    try:
+        reservations = get_order_reservations_for_user(
+            user_id=user_id,
+            order_id=order_id,
+            is_admin=bool(current_user.get("is_admin", False)),
+            db=db,
+        )
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+
+    return {"data": reservations}

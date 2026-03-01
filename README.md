@@ -75,6 +75,46 @@ CREATE INDEX ix_webhook_events_provider ON webhook_events(provider);
 CREATE UNIQUE INDEX ux_webhook_events_event_key ON webhook_events(event_key);
 ```
 
+## Stock reservations migration (orders submitted)
+
+Stock reservations reserve inventory on `submitted`, consume on `paid`, and expire after 42 hours.
+
+### SQL migration
+
+```sql
+CREATE TABLE stock_reservations (
+  id SERIAL PRIMARY KEY,
+  order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  order_item_id INTEGER NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
+  variant_id INTEGER NOT NULL REFERENCES product_variants(id) ON DELETE RESTRICT,
+  quantity INTEGER NOT NULL,
+  status VARCHAR NOT NULL DEFAULT 'active',
+  expires_at TIMESTAMP NOT NULL,
+  consumed_at TIMESTAMP NULL,
+  released_at TIMESTAMP NULL,
+  reason VARCHAR NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT ck_stock_reservations_quantity_positive CHECK (quantity > 0)
+);
+
+CREATE INDEX ix_stock_reservations_variant_status_expires
+  ON stock_reservations(variant_id, status, expires_at);
+CREATE INDEX ix_stock_reservations_order_status
+  ON stock_reservations(order_id, status);
+CREATE INDEX ix_stock_reservations_status_expires
+  ON stock_reservations(status, expires_at);
+CREATE UNIQUE INDEX uq_stock_reservation_active_per_item
+  ON stock_reservations(order_item_id)
+  WHERE status = 'active';
+```
+
+### Quick validation
+
+```sql
+SELECT status, COUNT(*) FROM stock_reservations GROUP BY status ORDER BY status;
+```
+
 ## Pagos MP en local (Uvicorn + ngrok fijo)
 
 ### Requisitos

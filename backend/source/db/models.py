@@ -2,6 +2,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Float,
@@ -162,6 +163,11 @@ class Order(Base):
         back_populates="order",
         cascade="all, delete-orphan",
     )
+    stock_reservations = relationship(
+        "StockReservation",
+        back_populates="order",
+        cascade="all, delete-orphan",
+    )
 
 
 class OrderItem(Base):
@@ -201,6 +207,11 @@ class OrderItem(Base):
     product = relationship("Product")
     variant = relationship("ProductVariant")
     discount = relationship("Discount")
+    stock_reservations = relationship(
+        "StockReservation",
+        back_populates="order_item",
+        cascade="all, delete-orphan",
+    )
 
 
 class Payment(Base):
@@ -261,6 +272,65 @@ class WebhookEvent(Base):
     received_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     processed_at = Column(DateTime, nullable=True)
     last_error = Column(Text, nullable=True)
+
+
+class StockReservation(Base):
+    __tablename__ = "stock_reservations"
+    __table_args__ = (
+        Index(
+            "ix_stock_reservations_variant_status_expires",
+            "variant_id",
+            "status",
+            "expires_at",
+        ),
+        Index("ix_stock_reservations_order_status", "order_id", "status"),
+        Index("ix_stock_reservations_status_expires", "status", "expires_at"),
+        Index(
+            "uq_stock_reservation_active_per_item",
+            "order_item_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+            sqlite_where=text("status = 'active'"),
+        ),
+        CheckConstraint("quantity > 0", name="ck_stock_reservations_quantity_positive"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(
+        Integer,
+        ForeignKey("orders.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    order_item_id = Column(
+        Integer,
+        ForeignKey("order_items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    variant_id = Column(
+        Integer,
+        ForeignKey("product_variants.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    quantity = Column(Integer, nullable=False)
+    status = Column(String, nullable=False, default="active")
+    expires_at = Column(DateTime, nullable=False, index=True)
+    consumed_at = Column(DateTime, nullable=True)
+    released_at = Column(DateTime, nullable=True)
+    reason = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    order = relationship("Order", back_populates="stock_reservations")
+    order_item = relationship("OrderItem", back_populates="stock_reservations")
+    variant = relationship("ProductVariant")
 
 
 class Discount(Base):

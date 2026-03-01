@@ -15,8 +15,14 @@ from source.db.config import (
     get_mercadopago_pending_url,
     get_mercadopago_success_url,
 )
-from source.db.models import Order, OrderItem, Payment, ProductVariant, WebhookEvent
+from source.db.models import Order, Payment, WebhookEvent
 from source.services.mercadopago_client import create_checkout_preference
+from source.services.stock_reservations_s import (
+    consume_reservations_for_paid_order,
+    expire_active_reservations,
+    list_active_reservations_for_order,
+    release_reservations_for_cancelled_order,
+)
 
 ALLOWED_PAYMENT_METHODS = {"bank_transfer", "mercadopago"}
 MERCADOPAGO_PROVIDER_TO_INTERNAL_STATUS = {
@@ -490,6 +496,8 @@ def apply_mercadopago_normalized_state(
     notification_payload: dict | None = None,
     db: Session,
 ) -> dict:
+    expire_active_reservations(now=datetime.utcnow(), db=db)
+
     if not isinstance(normalized_state, dict):
         raise ValueError("normalized_state is required")
 
@@ -562,12 +570,19 @@ def apply_mercadopago_normalized_state(
     if internal_status == "paid":
         if order.status not in {"submitted", "paid"}:
             raise ValueError("order can only be paid from submitted status")
+        if order.status == "submitted":
+            consume_reservations_for_paid_order(order_id=order.id, db=db)
         if order.status != "paid":
             order.status = "paid"
         if order.paid_at is None:
             order.paid_at = now
     elif internal_status == "cancelled":
         if order.status != "paid":
+            release_reservations_for_cancelled_order(
+                order_id=order.id,
+                reason="order_cancelled",
+                db=db,
+            )
             if order.status != "cancelled":
                 order.status = "cancelled"
             if order.cancelled_at is None:
@@ -588,6 +603,8 @@ def create_payment_for_order(
     currency: str | None = None,
     expires_in_minutes: int = 60,
 ) -> dict:
+    expire_active_reservations(now=datetime.utcnow(), db=db)
+
     if method not in ALLOWED_PAYMENT_METHODS:
         raise ValueError("invalid payment method")
     if expires_in_minutes <= 0:
@@ -632,6 +649,8 @@ def create_payment_for_order(
         raise ValueError("payment can only be created for submitted orders")
     if not order.items:
         raise ValueError("cannot create payment for an empty order")
+    if not list_active_reservations_for_order(order_id=order.id, db=db):
+        raise ValueError("order has no active stock reservations")
 
     amount = round(float(order.total_amount or 0.0), 2)
     if amount <= 0:
@@ -750,6 +769,8 @@ def confirm_manual_payment_for_order(
     paid_amount: float,
     db: Session,
 ) -> dict:
+    expire_active_reservations(now=datetime.utcnow(), db=db)
+
     normalized_ref = payment_ref.strip()
     if not normalized_ref:
         raise ValueError("payment_ref is required")
@@ -759,7 +780,7 @@ def confirm_manual_payment_for_order(
     order = (
         db.query(Order)
         .options(
-            joinedload(Order.items).joinedload(OrderItem.variant),
+            joinedload(Order.items),
             joinedload(Order.payments),
         )
         .filter(Order.id == order_id)
@@ -799,40 +820,7 @@ def confirm_manual_payment_for_order(
             return _payment_to_dict(existing_paid_by_ref)
         raise ValueError("order already paid with a different payment_ref")
 
-    for item in order.items:
-        variant = item.variant
-        if variant is None:
-            variant = (
-                db.query(ProductVariant)
-                .filter(
-                    ProductVariant.id == item.variant_id,
-                    ProductVariant.is_active.is_(True),
-                )
-                .with_for_update()
-                .first()
-            )
-            if variant is None:
-                raise ValueError(f"variant {item.variant_id} not found")
-        elif not bool(variant.is_active):
-            raise ValueError(f"variant {item.variant_id} not found")
-
-        current_stock = int(variant.stock or 0)
-        if current_stock < int(item.quantity):
-            raise ValueError(f"insufficient stock for variant {item.variant_id}")
-
-    for item in order.items:
-        variant = (
-            db.query(ProductVariant)
-            .filter(
-                ProductVariant.id == item.variant_id,
-                ProductVariant.is_active.is_(True),
-            )
-            .with_for_update()
-            .first()
-        )
-        if variant is None:
-            raise ValueError(f"variant {item.variant_id} not found")
-        variant.stock = int(variant.stock) - int(item.quantity)
+    consume_reservations_for_paid_order(order_id=order.id, db=db)
 
     now = datetime.utcnow()
     payment = existing_paid_by_ref
