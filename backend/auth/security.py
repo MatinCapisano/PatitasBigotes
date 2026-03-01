@@ -9,7 +9,6 @@ from passlib.context import CryptContext
 from passlib.exc import UnknownHashError
 
 DEFAULT_ALGORITHM = "HS256"
-DEFAULT_ACCESS_TOKEN_EXPIRE_MINUTES = 120
 DEFAULT_REFRESH_TOKEN_EXPIRE_DAYS = 30
 DEFAULT_JWT_ISSUER = "patitasbigotes-api"
 
@@ -34,10 +33,7 @@ def obtener_config_jwt() -> dict:
     secret_key = os.getenv("JWT_SECRET", "").strip()
     algorithm = os.getenv("JWT_ALGORITHM", DEFAULT_ALGORITHM).strip()
     issuer = os.getenv("JWT_ISSUER", DEFAULT_JWT_ISSUER).strip()
-    raw_access_minutes = os.getenv(
-        "ACCESS_TOKEN_EXPIRE_MINUTES",
-        str(DEFAULT_ACCESS_TOKEN_EXPIRE_MINUTES),
-    ).strip()
+    raw_access_minutes = os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "").strip()
     raw_refresh_days = os.getenv(
         "REFRESH_TOKEN_EXPIRE_DAYS",
         str(DEFAULT_REFRESH_TOKEN_EXPIRE_DAYS),
@@ -49,6 +45,8 @@ def obtener_config_jwt() -> dict:
         raise RuntimeError("JWT_ALGORITHM is required")
     if not issuer:
         raise RuntimeError("JWT_ISSUER is required")
+    if not raw_access_minutes:
+        raise RuntimeError("ACCESS_TOKEN_EXPIRE_MINUTES is required")
 
     access_minutes = int(raw_access_minutes)
     if access_minutes <= 0:

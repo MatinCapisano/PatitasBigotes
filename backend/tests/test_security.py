@@ -2,6 +2,7 @@ import sys
 import unittest
 import json
 import base64
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -13,6 +14,20 @@ from auth import security
 
 
 class SecurityTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._env_backup = dict(os.environ)
+        os.environ["JWT_SECRET"] = "test-secret-for-security-tests"
+        os.environ["JWT_ALGORITHM"] = "HS256"
+        os.environ["JWT_ISSUER"] = "patitasbigotes-api"
+        os.environ["ACCESS_TOKEN_EXPIRE_MINUTES"] = "120"
+        os.environ["REFRESH_TOKEN_EXPIRE_DAYS"] = "30"
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        os.environ.clear()
+        os.environ.update(cls._env_backup)
+
     @staticmethod
     def _decode_payload_without_verification(token: str) -> dict:
         payload_segment = token.split(".")[1]
@@ -55,6 +70,19 @@ class SecurityTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             security.decode_access_token(refresh)
         self.assertEqual(str(ctx.exception), "Invalid token type")
+
+    def test_missing_access_token_expire_minutes_raises(self) -> None:
+        previous = os.environ.pop("ACCESS_TOKEN_EXPIRE_MINUTES", None)
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                security.obtener_config_jwt()
+            self.assertEqual(
+                str(ctx.exception),
+                "ACCESS_TOKEN_EXPIRE_MINUTES is required",
+            )
+        finally:
+            if previous is not None:
+                os.environ["ACCESS_TOKEN_EXPIRE_MINUTES"] = previous
 
 
 if __name__ == "__main__":
