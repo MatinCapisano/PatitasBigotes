@@ -24,8 +24,8 @@ router = APIRouter()
 
 @router.get("/products")
 def get_products(
-    min_price: Optional[float] = Query(None),
-    max_price: Optional[float] = Query(None),
+    min_price: Optional[int] = Query(None),
+    max_price: Optional[int] = Query(None),
     category: Optional[str] = Query(None),
     sort_by: Optional[Literal["price", "name"]] = Query(None),
     sort_order: Literal["asc", "desc"] = Query("asc"),

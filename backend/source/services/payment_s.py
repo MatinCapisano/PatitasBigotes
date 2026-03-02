@@ -17,6 +17,7 @@ from source.db.config import (
 )
 from source.db.models import Order, Payment, WebhookEvent
 from source.services.mercadopago_client import create_checkout_preference
+from source.services.money_s import parse_amount_to_cents
 from source.services.stock_reservations_s import (
     consume_reservations_for_paid_order,
     expire_active_reservations,
@@ -44,13 +45,14 @@ ALLOWED_PAYMENT_TRANSITIONS = {
     "expired": {"expired"},
 }
 
+
 def _payment_to_dict(payment: Payment) -> dict:
     return {
         "id": payment.id,
         "order_id": payment.order_id,
         "method": payment.method,
         "status": payment.status,
-        "amount": float(payment.amount),
+        "amount": int(payment.amount),
         "currency": payment.currency,
         "idempotency_key": payment.idempotency_key,
         "external_ref": payment.external_ref,
@@ -209,12 +211,12 @@ def _require_normalized_str(value: object, *, field: str, lower: bool = False) -
     return normalized
 
 
-def _to_float_or_none(value: object, *, field: str) -> float | None:
+def _to_cents_or_none(value: object, *, field: str) -> int | None:
     if value is None:
         return None
     try:
-        return float(value)
-    except (TypeError, ValueError):
+        return parse_amount_to_cents(str(value))
+    except ValueError:
         raise ValueError(f"invalid mercadopago {field}") from None
 
 
@@ -237,7 +239,7 @@ def normalize_mp_payment_state(mp_payment: dict) -> dict:
     if raw_currency is not None:
         currency = str(raw_currency).strip().upper() or None
 
-    amount = _to_float_or_none(
+    amount = _to_cents_or_none(
         mp_payment.get("transaction_amount"),
         field="transaction_amount",
     )
@@ -349,11 +351,11 @@ def _find_active_pending_payment(
 def _validate_active_pending_compatibility(
     active_payment: Payment,
     *,
-    requested_amount: float,
+    requested_amount: int,
     requested_currency: str,
 ) -> None:
-    active_amount = round(float(active_payment.amount), 2)
-    if active_amount != round(float(requested_amount), 2):
+    active_amount = int(active_payment.amount)
+    if active_amount != int(requested_amount):
         raise ValueError(
             "there is already an active pending payment with a different amount"
         )
@@ -366,7 +368,7 @@ def _validate_active_pending_compatibility(
 def _build_bank_transfer_payload(
     order_id: int,
     payment_id: int,
-    amount: float,
+    amount: int,
     currency: str,
 ) -> dict:
     return {
@@ -383,13 +385,14 @@ def _build_bank_transfer_payload(
 def _build_mercadopago_payload(
     order_id: int,
     payment_id: int,
-    amount: float,
+    amount: int,
     currency: str,
     expires_at: datetime,
     payment_idempotency_key: str,
 ) -> tuple[str, dict]:
     external_ref = f"mp-order-{order_id}-pay-{payment_id}"
     provider_idempotency_key = f"mp-preference-{payment_idempotency_key}"
+    unit_price = int(amount) / 100
     preference_payload = {
         "external_reference": external_ref,
         "items": [
@@ -398,7 +401,7 @@ def _build_mercadopago_payload(
                 "title": f"Order #{order_id}",
                 "quantity": 1,
                 "currency_id": currency,
-                "unit_price": amount,
+                "unit_price": unit_price,
             }
         ],
         "back_urls": {
@@ -511,10 +514,9 @@ def apply_mercadopago_normalized_state(
     if external_reference is None:
         raise ValueError("normalized_state.external_reference is required")
 
-    normalized_amount = _to_float_or_none(
-        normalized_state.get("amount"),
-        field="transaction_amount",
-    )
+    normalized_amount = normalized_state.get("amount")
+    if normalized_amount is not None:
+        normalized_amount = int(normalized_amount)
     normalized_currency = _normalize_optional_str(normalized_state.get("currency"))
     if normalized_currency is not None:
         normalized_currency = normalized_currency.upper()
@@ -535,7 +537,7 @@ def apply_mercadopago_normalized_state(
     if payment_external_ref != external_reference:
         raise ValueError("external_reference does not match payment")
 
-    if normalized_amount is not None and abs(float(payment.amount) - normalized_amount) > 0.01:
+    if normalized_amount is not None and int(payment.amount) != normalized_amount:
         raise ValueError("payment amount mismatch")
     if normalized_currency is not None and payment.currency.strip().upper() != normalized_currency:
         raise ValueError("payment currency mismatch")
@@ -554,8 +556,7 @@ def apply_mercadopago_normalized_state(
         "provider_status": provider_status,
         "provider_status_detail": normalized_state.get("provider_status_detail"),
         "internal_status": internal_status,
-        "amount_consistent": normalized_amount is None
-        or abs(float(payment.amount) - normalized_amount) <= 0.01,
+        "amount_consistent": normalized_amount is None or int(payment.amount) == normalized_amount,
         "currency_consistent": normalized_currency is None
         or payment.currency.strip().upper() == normalized_currency,
         "date_last_updated": normalized_state.get("date_last_updated"),
@@ -652,7 +653,7 @@ def create_payment_for_order(
     if not list_active_reservations_for_order(order_id=order.id, db=db):
         raise ValueError("order has no active stock reservations")
 
-    amount = round(float(order.total_amount or 0.0), 2)
+    amount = int(order.total_amount or 0)
     if amount <= 0:
         raise ValueError("order total must be greater than 0")
 
@@ -766,7 +767,7 @@ def confirm_manual_payment_for_order(
     order_id: int,
     user_id: int,
     payment_ref: str,
-    paid_amount: float,
+    paid_amount: int,
     db: Session,
 ) -> dict:
     expire_active_reservations(now=datetime.utcnow(), db=db)
@@ -774,7 +775,7 @@ def confirm_manual_payment_for_order(
     normalized_ref = payment_ref.strip()
     if not normalized_ref:
         raise ValueError("payment_ref is required")
-    if paid_amount <= 0:
+    if int(paid_amount) <= 0:
         raise ValueError("paid_amount must be greater than 0")
 
     order = (
@@ -797,8 +798,8 @@ def confirm_manual_payment_for_order(
     if not order.items:
         raise ValueError("cannot pay an empty order")
 
-    expected_total = round(float(order.total_amount or 0.0), 2)
-    received_total = round(float(paid_amount), 2)
+    expected_total = int(order.total_amount or 0)
+    received_total = int(paid_amount)
     if expected_total != received_total:
         raise ValueError("paid_amount does not match order total")
 
@@ -815,7 +816,7 @@ def confirm_manual_payment_for_order(
     if order.status == "paid":
         if (
             existing_paid_by_ref is not None
-            and round(float(existing_paid_by_ref.amount), 2) == received_total
+            and int(existing_paid_by_ref.amount) == received_total
         ):
             return _payment_to_dict(existing_paid_by_ref)
         raise ValueError("order already paid with a different payment_ref")

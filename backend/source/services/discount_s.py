@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Iterable, TypedDict
 
 from sqlalchemy import insert
 from sqlalchemy.orm import Session, joinedload
 
 from source.db.models import Category, Discount, DiscountProduct, Product
+from source.services.money_s import calcular_amount, parse_amount_to_cents
 
 ALLOWED_DISCOUNT_TYPES = {"percent", "fixed"}
 ALLOWED_DISCOUNT_SCOPES = {"all", "category", "product", "product_list"}
@@ -16,7 +18,7 @@ class DiscountDTO(TypedDict):
     id: int
     name: str
     type: str
-    value: float
+    value: int
     scope: str
     scope_value: str | int | None
     is_active: bool
@@ -36,13 +38,27 @@ def _coerce_datetime(value) -> datetime | None:
     return None
 
 
+def _normalize_discount_value(discount_type: str, value: object) -> int:
+    if value is None:
+        raise ValueError("discount value must be greater than 0")
+    if discount_type == "percent":
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("discount percent must be an integer") from exc
+        if normalized < 1 or normalized > 100:
+            raise ValueError("percent discount must be between 1 and 100")
+        return normalized
+    return parse_amount_to_cents(value if isinstance(value, (int, Decimal)) else str(value))
+
+
 def _discount_to_dict(discount: Discount) -> DiscountDTO:
     product_ids = [link.product_id for link in discount.product_links]
     return {
         "id": discount.id,
         "name": discount.name,
         "type": discount.type,
-        "value": float(discount.value),
+        "value": int(discount.value),
         "scope": discount.scope,
         "scope_value": discount.scope_value,
         "is_active": bool(discount.is_active),
@@ -95,11 +111,12 @@ def _set_discount_product_list(db: Session, discount: Discount, product_ids: lis
 
 def create_discount(payload: dict, db: Session) -> DiscountDTO:
     _validate_discount_payload(payload, db=db)
+    normalized_value = _normalize_discount_value(payload["type"], payload["value"])
 
     discount = Discount(
         name=payload["name"],
         type=payload["type"],
-        value=float(payload["value"]),
+        value=normalized_value,
         scope=payload["scope"],
         scope_value=payload.get("scope_value"),
         is_active=bool(payload.get("is_active", True)),
@@ -135,10 +152,11 @@ def update_discount(discount_id: int, updates: dict, db: Session) -> DiscountDTO
 
     merged = {**current, **updates}
     _validate_discount_payload(merged, db=db)
+    normalized_value = _normalize_discount_value(merged["type"], merged["value"])
 
     discount.name = merged["name"]
     discount.type = merged["type"]
-    discount.value = float(merged["value"])
+    discount.value = normalized_value
     discount.scope = merged["scope"]
     discount.scope_value = merged.get("scope_value")
     discount.is_active = bool(merged.get("is_active", True))
@@ -187,10 +205,7 @@ def _validate_discount_payload(payload: dict, *, db: Session) -> None:
         raise ValueError("invalid discount type")
     if scope not in ALLOWED_DISCOUNT_SCOPES:
         raise ValueError("invalid discount scope")
-    if value is None or float(value) <= 0:
-        raise ValueError("discount value must be greater than 0")
-    if discount_type == "percent" and float(value) > 100:
-        raise ValueError("percent discount cannot exceed 100")
+    _normalize_discount_value(discount_type, value)
     if starts_at is not None and ends_at is not None and starts_at > ends_at:
         raise ValueError("starts_at must be before or equal to ends_at")
 
@@ -221,7 +236,6 @@ def _validate_discount_payload(payload: dict, *, db: Session) -> None:
             raise ValueError("product_ids is required for product_list scope")
 
 
-# Core (pure logic)
 def is_discount_currently_valid(discount: DiscountDTO, at: datetime | None = None) -> bool:
     now = at or datetime.utcnow()
     if not discount.get("is_active", False):
@@ -237,9 +251,35 @@ def is_discount_currently_valid(discount: DiscountDTO, at: datetime | None = Non
     return True
 
 
-def select_best_discount(discounts: Iterable[DiscountDTO], unit_price: float) -> DiscountDTO | None:
+def calculate_line_discount(unit_price: int, discount: DiscountDTO) -> int:
+    discount_type = discount.get("type")
+    value = int(discount.get("value", 0))
+
+    if unit_price <= 0 or value <= 0:
+        return 0
+
+    if discount_type == "percent":
+        pricing = calcular_amount(
+            unit_price=unit_price,
+            quantity=1,
+            discount_type="percent",
+            discount_value=value,
+        )
+    elif discount_type == "fixed":
+        pricing = calcular_amount(
+            unit_price=unit_price,
+            quantity=1,
+            discount_type="fixed",
+            discount_value=value,
+        )
+    else:
+        return 0
+    return int(pricing["discount_amount"])
+
+
+def select_best_discount(discounts: Iterable[DiscountDTO], unit_price: int) -> DiscountDTO | None:
     best: DiscountDTO | None = None
-    best_amount = 0.0
+    best_amount = 0
 
     for discount in discounts:
         amount = calculate_line_discount(unit_price=unit_price, discount=discount)
@@ -250,42 +290,31 @@ def select_best_discount(discounts: Iterable[DiscountDTO], unit_price: float) ->
     return best
 
 
-def calculate_line_discount(unit_price: float, discount: DiscountDTO) -> float:
-    discount_type = discount.get("type")
-    value = float(discount.get("value", 0))
-
-    if unit_price <= 0 or value <= 0:
-        return 0.0
-
-    if discount_type == "percent":
-        amount = unit_price * (value / 100.0)
-    elif discount_type == "fixed":
-        amount = value
-    else:
-        return 0.0
-
-    return max(0.0, min(amount, unit_price))
-
-
-def calculate_line_pricing(unit_price: float, quantity: int, discount: DiscountDTO | None) -> dict:
+def calculate_line_pricing(unit_price: int, quantity: int, discount: DiscountDTO | None) -> dict:
     if quantity <= 0:
         raise ValueError("quantity must be greater than 0")
 
-    discount_amount = 0.0
+    discount_type = None
+    discount_value = None
     discount_id = None
     if discount is not None:
-        discount_amount = calculate_line_discount(unit_price=unit_price, discount=discount)
+        discount_type = str(discount.get("type"))
+        discount_value = int(discount.get("value", 0))
         discount_id = discount.get("id")
 
-    final_unit_price = max(0.0, unit_price - discount_amount)
-
+    pricing = calcular_amount(
+        unit_price=unit_price,
+        quantity=quantity,
+        discount_type=discount_type,
+        discount_value=discount_value,
+    )
     return {
-        "unit_price": float(unit_price),
+        "unit_price": int(pricing["unit_price"]),
         "quantity": quantity,
         "discount_id": discount_id,
-        "discount_amount": float(discount_amount),
-        "final_unit_price": float(final_unit_price),
-        "line_total": float(final_unit_price * quantity),
+        "discount_amount": int(pricing["discount_amount"]),
+        "final_unit_price": int(pricing["final_unit_price"]),
+        "line_total": int(pricing["line_total"]),
     }
 
 
@@ -334,7 +363,6 @@ def remove_products_from_discount(discount: DiscountDTO, product_ids: list[int])
     return discount
 
 
-# Order orchestration helpers
 def reprice_order_items(order: dict, discounts: Iterable[DiscountDTO], products_by_id: dict[int, dict]) -> dict:
     for item in order.get("items", []):
         product = products_by_id.get(item["product_id"])
@@ -342,9 +370,9 @@ def reprice_order_items(order: dict, discounts: Iterable[DiscountDTO], products_
             continue
 
         applicable = get_applicable_discounts_for_product(product=product, discounts=discounts)
-        best = select_best_discount(applicable, unit_price=float(item["unit_price"]))
+        best = select_best_discount(applicable, unit_price=int(item["unit_price"]))
         pricing = calculate_line_pricing(
-            unit_price=float(item["unit_price"]),
+            unit_price=int(item["unit_price"]),
             quantity=int(item["quantity"]),
             discount=best,
         )
@@ -358,23 +386,23 @@ def reprice_order_items(order: dict, discounts: Iterable[DiscountDTO], products_
 
 
 def recalculate_order_totals(order: dict) -> dict:
-    subtotal = 0.0
-    discount_total = 0.0
-    total_amount = 0.0
+    subtotal = 0
+    discount_total = 0
+    total_amount = 0
 
     for item in order.get("items", []):
-        unit_price = float(item.get("unit_price", 0))
+        unit_price = int(item.get("unit_price", 0))
         qty = int(item.get("quantity", 0))
-        line_total = float(item.get("line_total", unit_price * qty))
-        line_discount = float(item.get("discount_amount", 0)) * qty
+        line_total = int(item.get("line_total", unit_price * qty))
+        line_discount = int(item.get("discount_amount", 0)) * qty
 
         subtotal += unit_price * qty
         discount_total += line_discount
         total_amount += line_total
 
-    order["subtotal"] = float(subtotal)
-    order["discount_total"] = float(discount_total)
-    order["total_amount"] = float(total_amount)
+    order["subtotal"] = subtotal
+    order["discount_total"] = discount_total
+    order["total_amount"] = total_amount
     return order
 
 
@@ -387,5 +415,5 @@ def freeze_order_pricing(order: dict) -> dict:
 def validate_order_pricing_before_submit(order: dict) -> None:
     if not order.get("items"):
         raise ValueError("cannot submit an empty order")
-    if float(order.get("total_amount", 0)) < 0:
+    if int(order.get("total_amount", 0)) < 0:
         raise ValueError("order total cannot be negative")

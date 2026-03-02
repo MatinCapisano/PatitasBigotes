@@ -35,11 +35,11 @@ def _product_inventory(product: Product) -> tuple[int, int]:
     return total_stock, active_flag
 
 
-def _compute_min_var_price(product: Product) -> float | None:
-    prices = [float(variant.price) for variant in product.variants]
+def _compute_min_var_price(product: Product) -> int | None:
+    prices = [int(variant.price) for variant in product.variants]
     if not prices:
         return None
-    return float(min(prices))
+    return int(min(prices))
 
 
 def _product_to_dict(product: Product) -> dict:
@@ -62,7 +62,7 @@ def _variant_to_dict(variant: ProductVariant) -> dict:
         "sku": variant.sku,
         "size": variant.size,
         "color": variant.color,
-        "price": float(variant.price),
+        "price": int(variant.price),
         "stock": int(variant.stock),
         "active": 1 if variant.is_active else 0,
     }
@@ -70,8 +70,8 @@ def _variant_to_dict(variant: ProductVariant) -> dict:
 
 def filter_and_sort_products(
     db: Session | None = None,
-    min_price: float | None = None,
-    max_price: float | None = None,
+    min_price: int | None = None,
+    max_price: int | None = None,
     category: str | None = None,
     sort_by: Literal["price", "name"] | None = None,
     sort_order: Literal["asc", "desc"] = "asc",

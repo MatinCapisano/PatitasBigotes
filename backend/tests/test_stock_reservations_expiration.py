@@ -79,7 +79,7 @@ class StockReservationExpirationTests(unittest.TestCase):
                 sku=f"SKU-{datetime.utcnow().timestamp()}",
                 size="M",
                 color="Blue",
-                price=100.0,
+                price=10000,
                 stock=variant_stock,
                 is_active=True,
             )
@@ -90,9 +90,9 @@ class StockReservationExpirationTests(unittest.TestCase):
                 user_id=user.id,
                 status=order_status,
                 currency="ARS",
-                subtotal=100.0,
-                discount_total=0.0,
-                total_amount=100.0,
+                subtotal=10000,
+                discount_total=0,
+                total_amount=10000,
                 pricing_frozen=True,
             )
             session.add(order)
@@ -103,11 +103,11 @@ class StockReservationExpirationTests(unittest.TestCase):
                 product_id=product.id,
                 variant_id=variant.id,
                 quantity=item_qty,
-                unit_price=100.0,
+                unit_price=10000,
                 discount_id=None,
-                discount_amount=0.0,
-                final_unit_price=100.0,
-                line_total=100.0 * item_qty,
+                discount_amount=0,
+                final_unit_price=10000,
+                line_total=10000 * item_qty,
             )
             session.add(item)
             session.flush()
@@ -129,7 +129,7 @@ class StockReservationExpirationTests(unittest.TestCase):
                         order_id=order.id,
                         method="bank_transfer",
                         status="pending",
-                        amount=float(order.total_amount),
+                        amount=int(order.total_amount),
                         currency="ARS",
                         idempotency_key=f"pay-{datetime.utcnow().timestamp()}",
                         external_ref=None,

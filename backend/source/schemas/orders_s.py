@@ -12,13 +12,13 @@ class UpdateOrderStatusRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: Literal["draft", "submitted", "paid", "cancelled"]
     payment_ref: str | None = None
-    paid_amount: float | None = Field(default=None, gt=0)
+    paid_amount: int | None = Field(default=None, gt=0)
 
 
 class PayOrderRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     payment_ref: str
-    paid_amount: float = Field(gt=0)
+    paid_amount: int = Field(gt=0)
 
 
 class ManualOrderCustomerRequest(BaseModel):

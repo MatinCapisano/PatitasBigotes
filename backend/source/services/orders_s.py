@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from source.db.models import Order, OrderItem, ProductVariant
 from source.services.discount_s import (
+    calculate_line_pricing,
     list_discounts,
     reprice_order_items,
     validate_order_pricing_before_submit,
@@ -51,11 +52,11 @@ def _order_to_dict(order: Order) -> dict:
                 "product_name": item.product.name if item.product is not None else None,
                 "variant_label": _variant_label(item.variant),
                 "quantity": int(item.quantity),
-                "unit_price": float(item.unit_price),
+                "unit_price": int(item.unit_price),
                 "discount_id": item.discount_id,
-                "discount_amount": float(item.discount_amount or 0),
-                "final_unit_price": float(item.final_unit_price or 0),
-                "line_total": float(item.line_total or 0),
+                "discount_amount": int(item.discount_amount or 0),
+                "final_unit_price": int(item.final_unit_price or 0),
+                "line_total": int(item.line_total or 0),
             }
         )
 
@@ -65,9 +66,9 @@ def _order_to_dict(order: Order) -> dict:
         "status": order.status,
         "currency": order.currency,
         "items": items,
-        "subtotal": float(order.subtotal or 0),
-        "discount_total": float(order.discount_total or 0),
-        "total_amount": float(order.total_amount or 0),
+        "subtotal": int(order.subtotal or 0),
+        "discount_total": int(order.discount_total or 0),
+        "total_amount": int(order.total_amount or 0),
         "pricing_frozen": bool(order.pricing_frozen),
         "pricing_frozen_at": order.pricing_frozen_at,
         "submitted_at": order.submitted_at,
@@ -89,17 +90,17 @@ def _recalculate_order_total(order: Order, db: Session, *, force: bool = False) 
                 "product_id": item.product_id,
                 "variant_id": item.variant_id,
                 "quantity": int(item.quantity),
-                "unit_price": float(item.unit_price),
+                "unit_price": int(item.unit_price),
                 "discount_id": item.discount_id,
-                "discount_amount": float(item.discount_amount or 0),
-                "final_unit_price": float(item.final_unit_price or 0),
-                "line_total": float(item.line_total or 0),
+                "discount_amount": int(item.discount_amount or 0),
+                "final_unit_price": int(item.final_unit_price or 0),
+                "line_total": int(item.line_total or 0),
             }
             for item in order.items
         ],
-        "subtotal": float(order.subtotal or 0),
-        "discount_total": float(order.discount_total or 0),
-        "total_amount": float(order.total_amount or 0),
+        "subtotal": int(order.subtotal or 0),
+        "discount_total": int(order.discount_total or 0),
+        "total_amount": int(order.total_amount or 0),
         "pricing_frozen": bool(order.pricing_frozen),
     }
 
@@ -121,13 +122,13 @@ def _recalculate_order_total(order: Order, db: Session, *, force: bool = False) 
         if item is None:
             continue
         item.discount_id = item_payload.get("discount_id")
-        item.discount_amount = float(item_payload.get("discount_amount", 0))
-        item.final_unit_price = float(item_payload.get("final_unit_price", 0))
-        item.line_total = float(item_payload.get("line_total", 0))
+        item.discount_amount = int(item_payload.get("discount_amount", 0))
+        item.final_unit_price = int(item_payload.get("final_unit_price", 0))
+        item.line_total = int(item_payload.get("line_total", 0))
 
-    order.subtotal = float(order_payload.get("subtotal", 0))
-    order.discount_total = float(order_payload.get("discount_total", 0))
-    order.total_amount = float(order_payload.get("total_amount", 0))
+    order.subtotal = int(order_payload.get("subtotal", 0))
+    order.discount_total = int(order_payload.get("discount_total", 0))
+    order.total_amount = int(order_payload.get("total_amount", 0))
 
 
 def get_or_create_draft_order(user_id: int, db: Session) -> tuple[dict, bool]:
@@ -147,9 +148,9 @@ def get_or_create_draft_order(user_id: int, db: Session) -> tuple[dict, bool]:
         user_id=user_id,
         status="draft",
         currency="ARS",
-        subtotal=0.0,
-        discount_total=0.0,
-        total_amount=0.0,
+        subtotal=0,
+        discount_total=0,
+        total_amount=0,
         pricing_frozen=False,
     )
     db.add(created)
@@ -176,9 +177,9 @@ def _get_or_create_draft_order_model(user_id: int, db: Session) -> tuple[Order, 
         user_id=user_id,
         status="draft",
         currency="ARS",
-        subtotal=0.0,
-        discount_total=0.0,
-        total_amount=0.0,
+        subtotal=0,
+        discount_total=0,
+        total_amount=0,
         pricing_frozen=False,
     )
     db.add(draft)
@@ -236,18 +237,32 @@ def add_item_to_draft_order(
     )
     if existing_item is not None:
         existing_item.quantity = int(existing_item.quantity) + quantity
+        pricing = calculate_line_pricing(
+            unit_price=int(existing_item.unit_price),
+            quantity=int(existing_item.quantity),
+            discount=None,
+        )
+        existing_item.discount_id = pricing["discount_id"]
+        existing_item.discount_amount = pricing["discount_amount"]
+        existing_item.final_unit_price = pricing["final_unit_price"]
+        existing_item.line_total = pricing["line_total"]
     else:
+        pricing = calculate_line_pricing(
+            unit_price=int(variant.price),
+            quantity=quantity,
+            discount=None,
+        )
         db.add(
             OrderItem(
                 order_id=order.id,
                 product_id=variant.product_id,
                 variant_id=variant.id,
                 quantity=quantity,
-                unit_price=float(variant.price),
-                discount_id=None,
-                discount_amount=0.0,
-                final_unit_price=float(variant.price),
-                line_total=float(variant.price) * quantity,
+                unit_price=pricing["unit_price"],
+                discount_id=pricing["discount_id"],
+                discount_amount=pricing["discount_amount"],
+                final_unit_price=pricing["final_unit_price"],
+                line_total=pricing["line_total"],
             )
         )
 
@@ -303,7 +318,7 @@ def change_order_status(
     *,
     is_admin: bool = False,
     payment_ref: str | None = None,
-    paid_amount: float | None = None,
+    paid_amount: int | None = None,
 ) -> dict:
     expire_active_reservations(now=_utc_now(), db=db)
 
@@ -337,14 +352,14 @@ def change_order_status(
             raise ValueError("only admins can set status paid manually")
         if payment_ref is None or not payment_ref.strip():
             raise ValueError("payment_ref is required when status is paid")
-        if paid_amount is None or float(paid_amount) <= 0:
+        if paid_amount is None or int(paid_amount) <= 0:
             raise ValueError("paid_amount must be greater than 0 when status is paid")
 
         confirm_manual_payment_for_order(
             order_id=order.id,
             user_id=order.user_id,
             payment_ref=payment_ref,
-            paid_amount=float(paid_amount),
+            paid_amount=int(paid_amount),
             db=db,
         )
         db.flush()
@@ -383,7 +398,7 @@ def pay_order(
     user_id: int,
     order_id: int,
     payment_ref: str,
-    paid_amount: float,
+    paid_amount: int,
     db: Session,
 ) -> dict:
     confirm_manual_payment_for_order(
@@ -430,9 +445,9 @@ def create_manual_submitted_order(
         user_id=int(user.id),
         status="draft",
         currency="ARS",
-        subtotal=0.0,
-        discount_total=0.0,
-        total_amount=0.0,
+        subtotal=0,
+        discount_total=0,
+        total_amount=0,
         pricing_frozen=False,
     )
     db.add(order)
@@ -458,6 +473,11 @@ def create_manual_submitted_order(
         )
         if variant is None:
             raise ValueError(f"variant {variant_id} not found")
+        pricing = calculate_line_pricing(
+            unit_price=int(variant.price),
+            quantity=quantity,
+            discount=None,
+        )
 
         db.add(
             OrderItem(
@@ -465,11 +485,11 @@ def create_manual_submitted_order(
                 product_id=variant.product_id,
                 variant_id=variant.id,
                 quantity=quantity,
-                unit_price=float(variant.price),
-                discount_id=None,
-                discount_amount=0.0,
-                final_unit_price=float(variant.price),
-                line_total=float(variant.price) * quantity,
+                unit_price=pricing["unit_price"],
+                discount_id=pricing["discount_id"],
+                discount_amount=pricing["discount_amount"],
+                final_unit_price=pricing["final_unit_price"],
+                line_total=pricing["line_total"],
             )
         )
 

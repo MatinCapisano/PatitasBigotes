@@ -70,7 +70,7 @@ class ProductsMinVarPriceTests(unittest.TestCase):
                         sku="P1-A",
                         size="S",
                         color="red",
-                        price=1200.0,
+                        price=120000,
                         stock=1,
                         is_active=True,
                     ),
@@ -79,7 +79,7 @@ class ProductsMinVarPriceTests(unittest.TestCase):
                         sku="P1-B",
                         size="M",
                         color="blue",
-                        price=900.0,
+                        price=90000,
                         stock=0,
                         is_active=False,
                     ),
@@ -88,7 +88,7 @@ class ProductsMinVarPriceTests(unittest.TestCase):
                         sku="P1-C",
                         size="L",
                         color="black",
-                        price=1500.0,
+                        price=150000,
                         stock=2,
                         is_active=True,
                     ),
@@ -106,7 +106,7 @@ class ProductsMinVarPriceTests(unittest.TestCase):
             session.close()
         self.assertIsNotNone(payload)
         assert payload is not None
-        self.assertEqual(payload["min_var_price"], 900.0)
+        self.assertEqual(payload["min_var_price"], 90000)
 
     def test_filter_by_min_price_uses_min_var_price(self) -> None:
         session = self.TestSession()
@@ -122,7 +122,7 @@ class ProductsMinVarPriceTests(unittest.TestCase):
                         sku="P1-A",
                         size=None,
                         color=None,
-                        price=500.0,
+                        price=50000,
                         stock=1,
                         is_active=True,
                     ),
@@ -131,7 +131,7 @@ class ProductsMinVarPriceTests(unittest.TestCase):
                         sku="P2-A",
                         size=None,
                         color=None,
-                        price=1500.0,
+                        price=150000,
                         stock=1,
                         is_active=True,
                     ),
@@ -143,7 +143,7 @@ class ProductsMinVarPriceTests(unittest.TestCase):
 
         session = self.TestSession()
         try:
-            data = products_s.filter_and_sort_products(min_price=1000, db=session)
+            data = products_s.filter_and_sort_products(min_price=100000, db=session)
         finally:
             session.close()
         names = [product["name"] for product in data]
@@ -163,7 +163,7 @@ class ProductsMinVarPriceTests(unittest.TestCase):
                         sku="P1-A",
                         size=None,
                         color=None,
-                        price=2000.0,
+                        price=200000,
                         stock=1,
                         is_active=True,
                     ),
@@ -172,7 +172,7 @@ class ProductsMinVarPriceTests(unittest.TestCase):
                         sku="P2-A",
                         size=None,
                         color=None,
-                        price=1000.0,
+                        price=100000,
                         stock=1,
                         is_active=True,
                     ),

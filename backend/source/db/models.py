@@ -5,7 +5,6 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
-    Float,
     ForeignKey,
     Index,
     Integer,
@@ -48,6 +47,9 @@ class Product(Base):
 
 class ProductVariant(Base):
     __tablename__ = "product_variants"
+    __table_args__ = (
+        CheckConstraint("price >= 0", name="ck_product_variants_price_non_negative"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
 
@@ -60,7 +62,7 @@ class ProductVariant(Base):
     sku = Column(String, nullable=False, unique=True, index=True)
     size = Column(String, nullable=True)
     color = Column(String, nullable=True)
-    price = Column(Float, nullable=False)
+    price = Column(Integer, nullable=False)
     stock = Column(Integer, nullable=False, default=0)
     is_active = Column(Boolean, nullable=False, default=True)
 
@@ -122,6 +124,11 @@ class Turn(Base):
 
 class Order(Base):
     __tablename__ = "orders"
+    __table_args__ = (
+        CheckConstraint("subtotal >= 0", name="ck_orders_subtotal_non_negative"),
+        CheckConstraint("discount_total >= 0", name="ck_orders_discount_total_non_negative"),
+        CheckConstraint("total_amount >= 0", name="ck_orders_total_amount_non_negative"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
 
@@ -133,9 +140,9 @@ class Order(Base):
 
     status = Column(String, nullable=False, default="draft")
     currency = Column(String, nullable=False, default="ARS")
-    subtotal = Column(Float, nullable=False, default=0)
-    discount_total = Column(Float, nullable=False, default=0)
-    total_amount = Column(Float, nullable=False, default=0)
+    subtotal = Column(Integer, nullable=False, default=0)
+    discount_total = Column(Integer, nullable=False, default=0)
+    total_amount = Column(Integer, nullable=False, default=0)
     pricing_frozen = Column(Boolean, nullable=False, default=False)
     pricing_frozen_at = Column(DateTime, nullable=True)
     submitted_at = Column(DateTime, nullable=True)
@@ -172,6 +179,13 @@ class Order(Base):
 
 class OrderItem(Base):
     __tablename__ = "order_items"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_order_items_quantity_positive"),
+        CheckConstraint("unit_price >= 0", name="ck_order_items_unit_price_non_negative"),
+        CheckConstraint("discount_amount >= 0", name="ck_order_items_discount_amount_non_negative"),
+        CheckConstraint("final_unit_price >= 0", name="ck_order_items_final_unit_price_non_negative"),
+        CheckConstraint("line_total >= 0", name="ck_order_items_line_total_non_negative"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
 
@@ -193,15 +207,15 @@ class OrderItem(Base):
     )
 
     quantity = Column(Integer, nullable=False)
-    unit_price = Column(Float, nullable=False)
+    unit_price = Column(Integer, nullable=False)
     discount_id = Column(
         Integer,
         ForeignKey("discounts.id", ondelete="SET NULL"),
         nullable=True,
     )
-    discount_amount = Column(Float, nullable=False, default=0)
-    final_unit_price = Column(Float, nullable=False, default=0)
-    line_total = Column(Float, nullable=False, default=0)
+    discount_amount = Column(Integer, nullable=False, default=0)
+    final_unit_price = Column(Integer, nullable=False, default=0)
+    line_total = Column(Integer, nullable=False, default=0)
 
     order = relationship("Order", back_populates="items")
     product = relationship("Product")
@@ -225,6 +239,7 @@ class Payment(Base):
             postgresql_where=text("status = 'pending'"),
             sqlite_where=text("status = 'pending'"),
         ),
+        CheckConstraint("amount >= 0", name="ck_payments_amount_non_negative"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -238,7 +253,7 @@ class Payment(Base):
 
     method = Column(String, nullable=False)  # bank_transfer | mercadopago
     status = Column(String, nullable=False, default="pending")
-    amount = Column(Float, nullable=False)
+    amount = Column(Integer, nullable=False)
     currency = Column(String, nullable=False, default="ARS")
 
     idempotency_key = Column(String, nullable=False, unique=True, index=True)
@@ -336,12 +351,15 @@ class StockReservation(Base):
 
 class Discount(Base):
     __tablename__ = "discounts"
+    __table_args__ = (
+        CheckConstraint("value > 0", name="ck_discounts_value_positive"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
 
     name = Column(String, nullable=False)
     type = Column(String, nullable=False)  # percent | fixed
-    value = Column(Float, nullable=False)
+    value = Column(Integer, nullable=False)
 
     scope = Column(String, nullable=False)  # all | category | product | product_list
     scope_value = Column(String, nullable=True)
