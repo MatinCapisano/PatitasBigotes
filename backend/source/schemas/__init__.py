@@ -5,6 +5,7 @@ from source.schemas.auth_s import (
     PasswordResetConfirmRequest,
     RegisterRequest,
     TokenRequest,
+    UpdateMyProfileRequest,
 )
 from source.schemas.discounts_s import CreateDiscountRequest, UpdateDiscountRequest
 from source.schemas.orders_s import (
@@ -55,6 +56,7 @@ __all__ = [
     "TokenRequest",
     "PasswordResetConfirmRequest",
     "PasswordChangeRequest",
+    "UpdateMyProfileRequest",
     "UpdateDiscountRequest",
     "CreateDiscountRequest",
     "PayOrderRequest",

@@ -21,3 +21,10 @@ export async function fetchStorefrontProductById(productId: number) {
   );
   return response.data;
 }
+
+export async function fetchStorefrontCategories() {
+  const response = await http.get<ApiEnvelope<Array<{ id: number; name: string }>>>(
+    "/storefront/categories"
+  );
+  return response.data;
+}

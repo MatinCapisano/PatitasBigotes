@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" fill="#f3ede4"/>
+
+  <defs>
+    <g id="paw" fill="#b99273">
+      <ellipse cx="0" cy="16" rx="44" ry="34"/>
+      <circle cx="-40" cy="-28" r="17"/>
+      <circle cx="-13" cy="-42" r="17"/>
+      <circle cx="13" cy="-42" r="17"/>
+      <circle cx="40" cy="-28" r="17"/>
+    </g>
+
+    <g id="whiskers" fill="none" stroke="#b8a091" stroke-width="4" stroke-linecap="round">
+      <path d="M-8 -10 C -34 -16 -58 -18 -86 -18"/>
+      <path d="M-8 0 C -36 0 -62 2 -90 8"/>
+      <path d="M-8 10 C -34 16 -58 22 -84 32"/>
+      <path d="M8 -10 C 34 -16 58 -18 86 -18"/>
+      <path d="M8 0 C 36 0 62 2 90 8"/>
+      <path d="M8 10 C 34 16 58 22 84 32"/>
+    </g>
+  </defs>
+
+  <!-- 4x4 centered grid, alternating paw / whiskers -->
+  <use href="#paw" x="128" y="128"/>
+  <use href="#whiskers" x="384" y="128"/>
+  <use href="#paw" x="640" y="128"/>
+  <use href="#whiskers" x="896" y="128"/>
+
+  <use href="#whiskers" x="128" y="384"/>
+  <use href="#paw" x="384" y="384"/>
+  <use href="#whiskers" x="640" y="384"/>
+  <use href="#paw" x="896" y="384"/>
+
+  <use href="#paw" x="128" y="640"/>
+  <use href="#whiskers" x="384" y="640"/>
+  <use href="#paw" x="640" y="640"/>
+  <use href="#whiskers" x="896" y="640"/>
+
+  <use href="#whiskers" x="128" y="896"/>
+  <use href="#paw" x="384" y="896"/>
+  <use href="#whiskers" x="640" y="896"/>
+  <use href="#paw" x="896" y="896"/>
+</svg>
+

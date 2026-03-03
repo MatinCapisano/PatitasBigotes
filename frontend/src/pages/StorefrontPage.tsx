@@ -1,7 +1,8 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import type { StorefrontProduct } from "../types";
-import { fetchStorefrontProducts } from "../services/storefront-api";
+import { fetchStorefrontCategories, fetchStorefrontProducts } from "../services/storefront-api";
 
 function formatArs(cents: number | null) {
   if (cents === null) return "-";
@@ -13,7 +14,9 @@ function formatArs(cents: number | null) {
 }
 
 export function StorefrontPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
+  const [categories, setCategories] = useState<Array<{ id: number; name: string }>>([]);
   const [products, setProducts] = useState<StorefrontProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -22,8 +25,11 @@ export function StorefrontPage() {
     setLoading(true);
     setError("");
     try {
+      const rawCategoryId = searchParams.get("category_id");
+      const categoryId = rawCategoryId ? Number(rawCategoryId) : undefined;
       const payload = await fetchStorefrontProducts({
-        q: currentQuery?.trim() || undefined
+        q: currentQuery?.trim() || undefined,
+        category_id: Number.isFinite(categoryId) ? categoryId : undefined
       });
       setProducts(payload.data);
     } catch {
@@ -35,6 +41,18 @@ export function StorefrontPage() {
 
   useEffect(() => {
     void load();
+  }, [searchParams]);
+
+  useEffect(() => {
+    async function run() {
+      try {
+        const payload = await fetchStorefrontCategories();
+        setCategories(payload.data);
+      } catch {
+        setCategories([]);
+      }
+    }
+    void run();
   }, []);
 
   function onSubmit(event: FormEvent) {
@@ -42,10 +60,42 @@ export function StorefrontPage() {
     void load(query);
   }
 
+  const selectedCategoryId = Number(searchParams.get("category_id") || 0) || null;
+
+  function onCategoryClick(categoryId: number | null) {
+    const next = new URLSearchParams(searchParams);
+    if (categoryId === null) {
+      next.delete("category_id");
+    } else {
+      next.set("category_id", String(categoryId));
+    }
+    setSearchParams(next);
+  }
+
   return (
     <section>
       <h1 className="page-title">Catalogo</h1>
       <p className="page-subtitle">Productos disponibles para mascotas.</p>
+
+      <div className="categories-inline">
+        <button
+          type="button"
+          className={selectedCategoryId === null ? "chip chip-selected" : "chip"}
+          onClick={() => onCategoryClick(null)}
+        >
+          Todas
+        </button>
+        {categories.map((category) => (
+          <button
+            key={category.id}
+            type="button"
+            className={selectedCategoryId === category.id ? "chip chip-selected" : "chip"}
+            onClick={() => onCategoryClick(category.id)}
+          >
+            {category.name}
+          </button>
+        ))}
+      </div>
 
       <form className="search-row" onSubmit={onSubmit}>
         <input

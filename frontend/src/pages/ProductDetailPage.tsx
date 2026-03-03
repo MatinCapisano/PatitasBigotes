@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { addToCart } from "../lib/cart-storage";
 import type { StorefrontProductDetail } from "../types";
 import { fetchStorefrontProductById } from "../services/storefront-api";
 
@@ -13,6 +14,7 @@ function formatArs(cents: number) {
 
 export function ProductDetailPage() {
   const params = useParams();
+  const navigate = useNavigate();
   const [product, setProduct] = useState<StorefrontProductDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -45,36 +47,76 @@ export function ProductDetailPage() {
   const currentImageUrl =
     selectedOption?.effective_img_url ?? selectedOption?.img_url ?? product.img_url ?? null;
 
+  function onBuy() {
+    if (!product) return;
+    if (!selectedOption || !selectedOption.in_stock) return;
+    addToCart({
+      product_id: product.id,
+      product_name: product.name,
+      variant_id: selectedOption.variant_id,
+      option_label: selectedOption.label,
+      unit_price: selectedOption.price,
+      quantity: 1,
+      img_url: selectedOption.effective_img_url ?? selectedOption.img_url ?? product.img_url
+    });
+    const goCheckout = window.confirm(
+      "Producto agregado al carrito.\nAceptar: Finalizar compra\nCancelar: Seguir comprando"
+    );
+    if (goCheckout) {
+      navigate("/checkout");
+      return;
+    }
+    navigate("/home");
+  }
+
   return (
     <section>
-      <Link className="link-back" to="/">
+      <Link className="link-back" to="/home">
         Volver al catalogo
       </Link>
-      <h1 className="page-title">{product.name}</h1>
-      <p className="page-subtitle">{product.description ?? "Sin descripcion"}</p>
-      {currentImageUrl ? (
-        <img className="product-image product-image-detail" src={currentImageUrl} alt={product.name} />
-      ) : (
-        <div className="image-placeholder image-placeholder-detail">Sin imagen</div>
-      )}
-      {!product.in_stock && <p className="warning">Este producto no tiene stock disponible.</p>}
 
-      <h2 className="section-title">Opciones ({product.option_axis})</h2>
-      <div className="options-grid">
-        {product.options.map((option) => (
-          <button
-            key={option.variant_id}
-            className={`chip ${option.in_stock ? "" : "chip-disabled"} ${
-              selectedVariantId === option.variant_id ? "chip-selected" : ""
-            }`}
-            type="button"
-            disabled={!option.in_stock}
-            onClick={() => setSelectedVariantId(option.variant_id)}
-          >
-            <span>{option.label}</span>
-            <strong>{formatArs(option.price)}</strong>
-          </button>
-        ))}
+      <div className="product-detail-layout">
+        <div>
+          {currentImageUrl ? (
+            <img className="product-image product-image-detail" src={currentImageUrl} alt={product.name} />
+          ) : (
+            <div className="image-placeholder image-placeholder-detail">Sin imagen</div>
+          )}
+        </div>
+
+        <div>
+          <h1 className="page-title">{product.name}</h1>
+          <p className="page-subtitle">{product.description ?? "Sin descripcion"}</p>
+          {!product.in_stock && <p className="warning">Este producto no tiene stock disponible.</p>}
+
+          <h2 className="section-title">Opciones ({product.option_axis})</h2>
+          <div className="options-grid">
+            {product.options.map((option) => (
+              <button
+                key={option.variant_id}
+                className={`chip ${option.in_stock ? "" : "chip-disabled"} ${
+                  selectedVariantId === option.variant_id ? "chip-selected" : ""
+                }`}
+                type="button"
+                disabled={!option.in_stock}
+                onClick={() => setSelectedVariantId(option.variant_id)}
+              >
+                <span>{option.label}</span>
+                <strong>{formatArs(option.price)}</strong>
+              </button>
+            ))}
+          </div>
+
+          <div className="detail-actions">
+            <button className="btn" type="button" disabled={!selectedOption?.in_stock} onClick={onBuy}>
+              Comprar
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="product-payment-note">
+        Metodos de pago: Transferencia bancaria, MercadoPago y Efectivo.
       </div>
     </section>
   );

@@ -26,6 +26,7 @@ from source.schemas import (
     PasswordResetConfirmRequest,
     RegisterRequest,
     TokenRequest,
+    UpdateMyProfileRequest,
 )
 from source.services.anti_abuse_s import (
     enforce_email_verify_resend_limits,
@@ -149,6 +150,21 @@ def _find_user_by_email(*, email: str, db: Session) -> User | None:
     if not normalized:
         return None
     return db.query(User).filter(User.email == normalized).first()
+
+
+def _serialize_my_profile(user: User) -> dict:
+    return {
+        "id": int(user.id),
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "email": user.email,
+        "phone": user.phone,
+        "has_account": bool(user.has_account),
+        "is_admin": bool(user.is_admin),
+        "email_verified": user.email_verified_at is not None,
+        "email_verified_at": user.email_verified_at,
+        "created_at": user.created_at,
+    }
 
 
 @router.post("/auth/register", status_code=status.HTTP_201_CREATED)
@@ -318,4 +334,78 @@ def password_change(
         raise_http_error_from_exception(exc, db=db)
     logger.info("event=auth_password_changed user_id=%s", int(user_id))
     return {"data": {"password_changed": True}}
+
+
+@router.get("/auth/me")
+def get_my_profile(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db_transactional),
+):
+    user_id = get_current_user_id(current_user)
+    try:
+        user = db.query(User).filter(User.id == int(user_id)).first()
+        if user is None:
+            raise LookupError("user not found")
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+    return {"data": _serialize_my_profile(user)}
+
+
+@router.patch("/auth/me")
+def update_my_profile(
+    payload: UpdateMyProfileRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db_transactional),
+):
+    user_id = get_current_user_id(current_user)
+    client_ip = _extract_client_ip(request)
+    try:
+        user = (
+            db.query(User)
+            .filter(User.id == int(user_id))
+            .with_for_update()
+            .first()
+        )
+        if user is None:
+            raise LookupError("user not found")
+
+        normalized_email = str(payload.email).strip().lower()
+        if not normalized_email:
+            raise ValueError("email is required")
+
+        verification_email_sent = False
+        if normalized_email != str(user.email or "").strip().lower():
+            existing = db.query(User).filter(User.email == normalized_email, User.id != int(user_id)).first()
+            if existing is not None:
+                raise HTTPException(status_code=409, detail="email already exists")
+
+            user.email = normalized_email
+            user.email_verified_at = None
+            user.email_verification_sent_at = datetime.now(UTC)
+            raw_token = create_one_time_token(
+                user_id=int(user.id),
+                action=ACTION_EMAIL_VERIFY,
+                ttl=timedelta(hours=VERIFY_EMAIL_TTL_HOURS),
+                requested_ip=client_ip,
+                db=db,
+            )
+            verify_link = f"{get_app_base_url()}/verify-email?token={raw_token}"
+            send_email_verification(to_email=user.email, verify_link=verify_link)
+            verification_email_sent = True
+
+        user.first_name = str(payload.first_name).strip()
+        user.last_name = str(payload.last_name).strip()
+        user.phone = str(payload.phone).strip()
+        db.flush()
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+
+    logger.info("event=auth_profile_updated user_id=%s email_changed=%s", int(user_id), bool(verification_email_sent))
+    return {
+        "data": _serialize_my_profile(user),
+        "meta": {
+            "verification_email_sent": verification_email_sent,
+        },
+    }
 

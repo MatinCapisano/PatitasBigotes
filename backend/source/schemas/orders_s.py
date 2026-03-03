@@ -52,3 +52,4 @@ class PublicGuestCheckoutRequest(BaseModel):
     customer: ManualOrderCustomerRequest
     items: list[PublicGuestCheckoutItemRequest] = Field(min_length=1, max_length=20)
     website: str | None = Field(default=None, max_length=0)
+    payment_method: Literal["bank_transfer", "mercadopago"] | None = None

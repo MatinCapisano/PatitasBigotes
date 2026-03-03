@@ -108,6 +108,21 @@ def create_guest_checkout_order(
             items=[item.model_dump() for item in payload.items],
             db=db,
         )
+        if payload.payment_method is not None:
+            order_payload = result.get("order") if isinstance(result, dict) else None
+            order_id = int(order_payload.get("id")) if isinstance(order_payload, dict) and order_payload.get("id") is not None else None
+            if order_id is None:
+                raise ValueError("invalid guest checkout response: missing order id")
+            payment = create_payment_for_order(
+                order_id=order_id,
+                method=payload.payment_method,
+                db=db,
+                user_id=None,
+                idempotency_key=f"guest-payment-{order_id}-{normalized_key}",
+                currency="ARS",
+                expires_in_minutes=60,
+            )
+            result["payment"] = payment
         mark_record_completed(
             record=claimed_record,
             response_payload=result,

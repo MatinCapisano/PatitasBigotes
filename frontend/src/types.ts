@@ -37,3 +37,16 @@ export type LoginResponse = {
   access_expires_in_seconds: number;
   access_expires_in_minutes: number;
 };
+
+export type MyProfile = {
+  id: number;
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string | null;
+  has_account: boolean;
+  is_admin: boolean;
+  email_verified: boolean;
+  email_verified_at: string | null;
+  created_at: string;
+};
