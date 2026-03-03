@@ -33,6 +33,7 @@ def storefront_categories(
 @router.get("/storefront/products")
 def storefront_products(
     category_id: int | None = Query(default=None),
+    q: str | None = Query(default=None, min_length=1),
     min_price: int | None = Query(default=None, ge=0),
     max_price: int | None = Query(default=None, ge=0),
     sort_by: Literal["price", "name", "created_at"] = Query(default="created_at"),
@@ -41,6 +42,10 @@ def storefront_products(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db_transactional),
 ):
+    normalized_q = str(q).strip() if isinstance(q, str) else None
+    if normalized_q == "":
+        normalized_q = None
+
     if min_price is not None and max_price is not None and min_price > max_price:
         raise HTTPException(status_code=400, detail="min_price must be less than or equal to max_price")
 
@@ -48,6 +53,7 @@ def storefront_products(
         data, total = list_storefront_products(
             db=db,
             category_id=category_id,
+            name_query=normalized_q,
             min_price=min_price,
             max_price=max_price,
             sort_by=sort_by,
@@ -67,6 +73,7 @@ def storefront_products(
             "has_more": int(offset) + len(data) < int(total),
             "filters_applied": {
                 "category_id": category_id,
+                "q": normalized_q,
                 "min_price": min_price,
                 "max_price": max_price,
                 "sort_by": sort_by,

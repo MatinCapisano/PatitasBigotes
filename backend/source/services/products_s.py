@@ -48,6 +48,7 @@ def _product_to_dict(product: Product) -> dict:
         "id": product.id,
         "name": product.name,
         "description": product.description,
+        "img_url": product.img_url,
         "min_var_price": _compute_min_var_price(product),
         "category_id": product.category_id,
         "category": product.category.name if product.category is not None else None,
@@ -63,6 +64,7 @@ def _variant_to_dict(variant: ProductVariant) -> dict:
         "sku": variant.sku,
         "size": variant.size,
         "color": variant.color,
+        "img_url": variant.img_url,
         "price": int(variant.price),
         "stock": int(variant.stock),
         "active": 1 if variant.is_active else 0,
@@ -74,6 +76,43 @@ def _variant_to_storefront_dict(variant: ProductVariant) -> dict:
         "id": int(variant.id),
         "size": variant.size,
         "color": variant.color,
+        "img_url": variant.img_url,
+        "price": int(variant.price),
+        "in_stock": int(variant.stock) > 0,
+    }
+
+
+def _storefront_option_axis(active_variants: list[ProductVariant]) -> str:
+    if any((variant.size or "").strip() for variant in active_variants):
+        return "size"
+    if any((variant.color or "").strip() for variant in active_variants):
+        return "color"
+    return "variant"
+
+
+def _storefront_option_label(variant: ProductVariant, axis: str) -> str:
+    size_label = str(variant.size or "").strip()
+    color_label = str(variant.color or "").strip()
+    if axis == "size" and size_label:
+        return size_label
+    if axis == "color" and color_label:
+        return color_label
+    if size_label and color_label:
+        return f"{size_label} / {color_label}"
+    if size_label:
+        return size_label
+    if color_label:
+        return color_label
+    return f"Variante {int(variant.id)}"
+
+
+def _variant_to_storefront_option(variant: ProductVariant, axis: str) -> dict:
+    return {
+        "variant_id": int(variant.id),
+        "label": _storefront_option_label(variant, axis),
+        "size": variant.size,
+        "color": variant.color,
+        "img_url": variant.img_url,
         "price": int(variant.price),
         "in_stock": int(variant.stock) > 0,
     }
@@ -89,6 +128,7 @@ def _product_to_storefront_dict(
         "id": int(product.id),
         "name": product.name,
         "description": product.description,
+        "img_url": product.img_url,
         "category_id": int(product.category_id),
         "category_name": product.category.name if product.category is not None else None,
         "min_var_price": None if min_var_price is None else int(min_var_price),
@@ -161,7 +201,7 @@ def get_product_by_id(product_id: int, db: Session | None = None) -> dict | None
 
 
 def update_product(product_id: int, updates: dict, db: Session) -> dict | None:
-    allowed_fields = {"name", "description", "category", "active"}
+    allowed_fields = {"name", "description", "img_url", "category", "active"}
     with _write_session_scope(db) as (session, _):
         product = (
             session.query(Product)
@@ -207,6 +247,8 @@ def create_product(payload: dict, db: Session) -> dict:
 
     description = payload.get("description")
     normalized_description = None if description is None else str(description).strip() or None
+    raw_img_url = payload.get("img_url")
+    normalized_img_url = None if raw_img_url is None else str(raw_img_url).strip() or None
 
     with _write_session_scope(db) as (session, _):
         category = session.query(Category).filter(Category.name == category_name).first()
@@ -216,6 +258,7 @@ def create_product(payload: dict, db: Session) -> dict:
         product = Product(
             name=name,
             description=normalized_description,
+            img_url=normalized_img_url,
             category_id=category.id,
         )
         session.add(product)
@@ -374,6 +417,7 @@ def list_storefront_products(
     *,
     db: Session | None = None,
     category_id: int | None = None,
+    name_query: str | None = None,
     min_price: int | None = None,
     max_price: int | None = None,
     sort_by: Literal["price", "name", "created_at"] = "created_at",
@@ -413,6 +457,10 @@ def list_storefront_products(
 
         if category_id is not None:
             query = query.filter(Product.category_id == int(category_id))
+        if name_query is not None:
+            normalized_query = str(name_query).strip()
+            if normalized_query:
+                query = query.filter(Product.name.ilike(f"%{normalized_query}%"))
         if min_price is not None:
             query = query.filter(aggregates_subquery.c.min_var_price >= int(min_price))
         if max_price is not None:
@@ -473,9 +521,19 @@ def get_storefront_product_by_id(product_id: int, db: Session | None = None) -> 
             min_var_price=min_var_price,
             active_stock_sum=active_stock_sum,
         )
+        sorted_active_variants = sorted(active_variants, key=lambda row: int(row.id))
+        option_axis = _storefront_option_axis(sorted_active_variants)
+        payload["option_axis"] = option_axis
+        payload["options"] = [
+            _variant_to_storefront_option(variant, option_axis)
+            for variant in sorted_active_variants
+        ]
+        for option in payload["options"]:
+            option["effective_img_url"] = option.get("img_url") or payload.get("img_url")
+        # Backward compatibility for existing consumers that still read `variants`.
         payload["variants"] = [
             _variant_to_storefront_dict(variant)
-            for variant in sorted(active_variants, key=lambda row: int(row.id))
+            for variant in sorted_active_variants
         ]
         return payload
 
@@ -559,6 +617,8 @@ def create_variant(payload: dict, db: Session) -> dict:
         raise ValueError("price must be greater than or equal to 0")
     if stock < 0:
         raise ValueError("stock must be greater than or equal to 0")
+    raw_img_url = payload.get("img_url")
+    normalized_img_url = None if raw_img_url is None else str(raw_img_url).strip() or None
 
     with _write_session_scope(db) as (session, _):
         product = session.query(Product).filter(Product.id == product_id).first()
@@ -574,6 +634,7 @@ def create_variant(payload: dict, db: Session) -> dict:
             sku=sku,
             size=None if payload.get("size") is None else str(payload.get("size")).strip() or None,
             color=None if payload.get("color") is None else str(payload.get("color")).strip() or None,
+            img_url=normalized_img_url,
             price=price,
             stock=stock,
             is_active=bool(payload.get("active", True)),
@@ -584,7 +645,7 @@ def create_variant(payload: dict, db: Session) -> dict:
 
 
 def update_variant(variant_id: int, updates: dict, db: Session) -> dict | None:
-    allowed_fields = {"product_id", "sku", "size", "color", "price", "stock", "active"}
+    allowed_fields = {"product_id", "sku", "size", "color", "img_url", "price", "stock", "active"}
     with _write_session_scope(db) as (session, _):
         variant = session.query(ProductVariant).filter(ProductVariant.id == variant_id).first()
         if variant is None:
@@ -618,6 +679,8 @@ def update_variant(variant_id: int, updates: dict, db: Session) -> dict | None:
                 variant.size = None if value is None else str(value).strip() or None
             elif field == "color":
                 variant.color = None if value is None else str(value).strip() or None
+            elif field == "img_url":
+                variant.img_url = None if value is None else str(value).strip() or None
             elif field == "price":
                 try:
                     price = int(value)

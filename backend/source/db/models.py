@@ -36,6 +36,7 @@ class Product(Base):
 
     name = Column(String, nullable=False)
     description = Column(String, nullable=True)
+    img_url = Column(String, nullable=True)
 
     category_id = Column(
         Integer,
@@ -65,6 +66,7 @@ class ProductVariant(Base):
     sku = Column(String, nullable=False, unique=True, index=True)
     size = Column(String, nullable=True)
     color = Column(String, nullable=True)
+    img_url = Column(String, nullable=True)
     price = Column(Integer, nullable=False)
     stock = Column(Integer, nullable=False, default=0)
     is_active = Column(Boolean, nullable=False, default=True)

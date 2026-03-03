@@ -168,12 +168,35 @@ class StorefrontApiTests(unittest.TestCase):
         payload = response["data"]
         self.assertNotIn("stock", payload)
         self.assertNotIn("active", payload)
-        self.assertIn("variants", payload)
-        self.assertEqual(len(payload["variants"]), 1)
-        variant_payload = payload["variants"][0]
-        self.assertIn("in_stock", variant_payload)
-        self.assertNotIn("stock", variant_payload)
-        self.assertNotIn("sku", variant_payload)
+        self.assertIn("option_axis", payload)
+        self.assertIn("options", payload)
+        self.assertEqual(len(payload["options"]), 1)
+        option_payload = payload["options"][0]
+        self.assertIn("in_stock", option_payload)
+        self.assertIn("variant_id", option_payload)
+        self.assertIn("label", option_payload)
+        self.assertNotIn("stock", option_payload)
+        self.assertNotIn("sku", option_payload)
+
+    def test_storefront_products_search_by_name(self) -> None:
+        db = SessionLocal()
+        try:
+            response = storefront_products(
+                category_id=None,
+                q="comida",
+                min_price=None,
+                max_price=None,
+                sort_by="name",
+                sort_order="asc",
+                limit=24,
+                offset=0,
+                db=db,
+            )
+        finally:
+            db.close()
+
+        ids = [item["id"] for item in response["data"]]
+        self.assertEqual(ids, [3])
 
     def test_storefront_product_detail_404_for_non_visible_product(self) -> None:
         db = SessionLocal()
