@@ -83,6 +83,7 @@ def issue_token_pair(*, user: User, db: Session) -> dict:
         {
             "sub": str(user.id),
             "is_admin": bool(user.is_admin),
+            "tv": int(user.token_version),
         }
     )
     refresh_token = create_refresh_token(usuario_id=int(user.id))
@@ -105,6 +106,20 @@ def issue_token_pair(*, user: User, db: Session) -> dict:
     }
 
 
+def bump_user_token_version(*, user_id: int, db: Session) -> User:
+    user = (
+        db.query(User)
+        .filter(User.id == user_id)
+        .with_for_update()
+        .first()
+    )
+    if user is None:
+        raise LookupError("user not found")
+    user.token_version = int(user.token_version) + 1
+    db.flush()
+    return user
+
+
 def refresh_with_token(*, refresh_token: str, db: Session) -> dict:
     refresh_claims = decode_refresh_token(refresh_token)
     user_id = parsear_sub_a_user_id(refresh_claims.get("sub"))
@@ -115,6 +130,7 @@ def refresh_with_token(*, refresh_token: str, db: Session) -> dict:
     session_row = (
         db.query(UserRefreshSession)
         .filter(UserRefreshSession.user_id == user_id)
+        .with_for_update()
         .first()
     )
     if session_row is None:
@@ -126,9 +142,7 @@ def refresh_with_token(*, refresh_token: str, db: Session) -> dict:
     if session_row.token_jti != token_jti:
         raise ValueError("invalid refresh token")
 
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
-        raise LookupError("user not found")
+    user = bump_user_token_version(user_id=user_id, db=db)
 
     return issue_token_pair(user=user, db=db)
 
@@ -143,6 +157,7 @@ def logout_with_refresh_token(*, refresh_token: str, db: Session) -> None:
     session_row = (
         db.query(UserRefreshSession)
         .filter(UserRefreshSession.user_id == user_id)
+        .with_for_update()
         .first()
     )
     if session_row is None:
@@ -156,4 +171,5 @@ def logout_with_refresh_token(*, refresh_token: str, db: Session) -> None:
     if session_row.token_jti != token_jti:
         raise ValueError("invalid refresh token")
 
+    bump_user_token_version(user_id=user_id, db=db)
     db.delete(session_row)

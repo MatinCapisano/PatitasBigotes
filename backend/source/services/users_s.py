@@ -19,7 +19,6 @@ def _serialize_user_created(user: User) -> dict:
         "phone": user.phone,
         "has_account": bool(user.has_account),
         "is_admin": bool(user.is_admin),
-        "is_active": bool(user.is_active),
         "status": "created",
     }
 
@@ -33,7 +32,6 @@ def serialize_user_basic(user: User) -> dict:
         "dni": user.dni,
         "phone": user.phone,
         "has_account": bool(user.has_account),
-        "is_active": bool(user.is_active),
     }
 
 
@@ -75,7 +73,6 @@ def create_user(payload: CreateUserRequest, db: Session) -> dict:
         password_hash=hash_password(user_data["password"]),
         has_account=True,
         is_admin=False,
-        is_active=True,
     )
     db.add(user)
     db.flush()
@@ -111,7 +108,6 @@ def create_guest_user(payload: CreateGuestUserRequest, db: Session) -> dict:
         password_hash="!",
         has_account=False,
         is_admin=False,
-        is_active=True,
     )
     db.add(user)
     db.flush()
@@ -180,7 +176,6 @@ def get_or_create_user_by_contact(
         password_hash="!",
         has_account=False,
         is_admin=False,
-        is_active=True,
     )
     db.add(user)
     db.flush()

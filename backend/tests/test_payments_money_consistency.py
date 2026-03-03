@@ -56,7 +56,6 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
                 password_hash="!",
                 has_account=False,
                 is_admin=False,
-                is_active=True,
             )
             category = Category(name=f"cat-{datetime.utcnow().timestamp()}")
             session.add_all([user, category])

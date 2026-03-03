@@ -82,9 +82,9 @@ class User(Base):
     phone = Column(String, nullable=True)
     password_hash = Column(String, nullable=False)
     has_account = Column(Boolean, default=False, nullable=False)
+    token_version = Column(Integer, nullable=False, default=1)
 
     is_admin = Column(Boolean, default=False, nullable=False)
-    is_active = Column(Boolean, default=True, nullable=False)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -96,6 +96,25 @@ class User(Base):
         uselist=False,
         cascade="all, delete-orphan",
     )
+
+
+class AuthLoginThrottle(Base):
+    __tablename__ = "auth_login_throttles"
+    __table_args__ = (
+        Index("uq_auth_login_throttles_scope_key", "scope", "key", unique=True),
+        CheckConstraint(
+            "failed_count >= 0",
+            name="ck_auth_login_throttles_failed_count_non_negative",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    scope = Column(String, nullable=False, index=True)
+    key = Column(String, nullable=False, index=True)
+    failed_count = Column(Integer, nullable=False, default=0)
+    window_started_at = Column(DateTime, nullable=False)
+    blocked_until = Column(DateTime, nullable=True, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class Turn(Base):
