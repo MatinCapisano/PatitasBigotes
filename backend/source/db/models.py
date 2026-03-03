@@ -351,7 +351,7 @@ class StockReservation(Base):
     quantity = Column(Integer, nullable=False)
     status = Column(String, nullable=False, default="active")
     reactivation_count = Column(Integer, nullable=False, default=0)
-    expires_at = Column(DateTime, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False)
     consumed_at = Column(DateTime, nullable=True)
     released_at = Column(DateTime, nullable=True)
     reason = Column(String, nullable=True)
@@ -414,6 +414,28 @@ class DiscountProduct(Base):
 
     discount = relationship("Discount", back_populates="product_links")
     product = relationship("Product", back_populates="discount_links")
+
+
+class IdempotencyRecord(Base):
+    __tablename__ = "idempotency_records"
+    __table_args__ = (
+        Index(
+            "uq_idempotency_records_scope_key",
+            "scope",
+            "idempotency_key",
+            unique=True,
+        ),
+        Index("ix_idempotency_records_expires_at", "expires_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    scope = Column(String, nullable=False, index=True)
+    idempotency_key = Column(String, nullable=False, index=True)
+    request_hash = Column(String, nullable=False)
+    response_payload = Column(Text, nullable=False)
+    status = Column(String, nullable=False, default="completed")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
 
 
 class UserRefreshSession(Base):

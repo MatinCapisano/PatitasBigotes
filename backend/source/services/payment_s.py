@@ -22,7 +22,6 @@ from source.services.stock_reservations_s import (
     consume_reservations_for_paid_order,
     expire_active_reservations,
     list_active_reservations_for_order,
-    release_reservations_for_cancelled_order,
 )
 
 ALLOWED_PAYMENT_METHODS = {"bank_transfer", "mercadopago"}
@@ -578,16 +577,9 @@ def apply_mercadopago_normalized_state(
         if order.paid_at is None:
             order.paid_at = now
     elif internal_status == "cancelled":
-        if order.status != "paid":
-            release_reservations_for_cancelled_order(
-                order_id=order.id,
-                reason="order_cancelled",
-                db=db,
-            )
-            if order.status != "cancelled":
-                order.status = "cancelled"
-            if order.cancelled_at is None:
-                order.cancelled_at = now
+        # A provider-level cancellation should only close this payment attempt.
+        # The order stays in its current state so the customer can retry payment.
+        pass
 
     db.flush()
     db.refresh(payment)

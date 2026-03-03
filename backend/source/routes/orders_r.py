@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
 from sqlalchemy.orm import Session
 
@@ -22,6 +24,17 @@ from source.services.orders_s import (
     remove_item_from_draft_order,
 )
 from source.services.anti_abuse_s import enforce_public_guest_checkout_limits
+from source.services.idempotency_s import (
+    IDEMPOTENCY_TTL_HOURS,
+    acquire_record,
+    build_guest_checkout_scope,
+    canonicalize_payload,
+    hash_payload,
+    load_replay_payload,
+    mark_record_completed,
+    normalize_idempotency_key,
+    prune_expired_records,
+)
 from source.services.payment_s import create_payment_for_order, list_payments_for_order
 
 router = APIRouter()
@@ -40,9 +53,39 @@ def _client_ip_from_request(request: Request) -> str:
 def create_guest_checkout_order(
     payload: PublicGuestCheckoutRequest,
     request: Request,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
     db: Session = Depends(get_db_transactional),
 ):
+    record_created = False
+    claimed_record = None
     try:
+        now = datetime.utcnow()
+        prune_expired_records(now=now, db=db)
+
+        normalized_key = normalize_idempotency_key(idempotency_key)
+        scope = build_guest_checkout_scope(payload.customer.email)
+        canonical_payload = canonicalize_payload(payload.model_dump())
+        request_hash = hash_payload(canonical_payload)
+        claimed_record, record_created = acquire_record(
+            scope=scope,
+            idempotency_key=normalized_key,
+            request_hash=request_hash,
+            expires_at=now + timedelta(hours=IDEMPOTENCY_TTL_HOURS),
+            db=db,
+        )
+        if not record_created:
+            if claimed_record.request_hash != request_hash:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="idempotency key already used with a different payload",
+                )
+            if claimed_record.status == "completed":
+                return {"data": load_replay_payload(claimed_record)}
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="idempotent request already in progress",
+            )
+
         enforce_public_guest_checkout_limits(
             client_ip=_client_ip_from_request(request),
             email=payload.customer.email,
@@ -56,7 +99,15 @@ def create_guest_checkout_order(
             items=[item.model_dump() for item in payload.items],
             db=db,
         )
+        mark_record_completed(
+            record=claimed_record,
+            response_payload=result,
+            db=db,
+        )
     except Exception as exc:
+        if record_created and claimed_record is not None and claimed_record.status == "processing":
+            db.delete(claimed_record)
+            db.flush()
         raise_http_error_from_exception(exc, db=db)
     return {"data": result}
 

@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from auth.security import hash_password
+from auth.security import ensure_password_policy, hash_password
 from source.db.models import User
 from source.schemas import CreateGuestUserRequest, CreateUserRequest, ResolveUserRequest
 
@@ -58,6 +58,7 @@ def create_user(payload: CreateUserRequest, db: Session) -> dict:
     existing_user = db.query(User).filter(User.email == normalized_email).first()
     if existing_user is not None:
         raise HTTPException(status_code=409, detail="email already exists")
+    ensure_password_policy(user_data["password"])
 
     user = User(
         first_name=_normalize_required_text(

@@ -8,6 +8,7 @@ from source.routes.orders_r import router as orders_router
 from source.routes.payments_r import router as payments_router
 from source.routes.products_r import router as products_router
 from source.routes.stock_reservations_r import router as stock_reservations_router
+from source.routes.storefront_r import router as storefront_router
 from source.routes.turns_r import router as turns_router
 from source.routes.users_r import router as users_router
 
@@ -26,6 +27,7 @@ app.include_router(turns_router)
 app.include_router(discounts_router)
 app.include_router(payments_router)
 app.include_router(stock_reservations_router)
+app.include_router(storefront_router)
 
 
 @app.get("/health")

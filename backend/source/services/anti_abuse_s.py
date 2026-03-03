@@ -44,6 +44,37 @@ def enforce_public_guest_checkout_limits(
             detail="invalid request",
         )
 
+    _enforce_public_email_ip_limits(
+        client_ip=client_ip,
+        email=email,
+        ip_detail="too many checkout attempts from this ip",
+        email_detail="too many checkout attempts for this email",
+        interval_detail="please wait before retrying checkout",
+    )
+
+
+def enforce_public_signup_limits(
+    *,
+    client_ip: str,
+    email: str,
+) -> None:
+    _enforce_public_email_ip_limits(
+        client_ip=client_ip,
+        email=email,
+        ip_detail="too many signup attempts from this ip",
+        email_detail="too many signup attempts for this email",
+        interval_detail="please wait before retrying signup",
+    )
+
+
+def _enforce_public_email_ip_limits(
+    *,
+    client_ip: str,
+    email: str,
+    ip_detail: str,
+    email_detail: str,
+    interval_detail: str,
+) -> None:
     normalized_ip = str(client_ip).strip() or "unknown"
     normalized_email = _normalize_email(email)
     now = _utc_now()
@@ -54,7 +85,7 @@ def enforce_public_guest_checkout_limits(
         if len(ip_queue) >= IP_MAX_REQUESTS:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="too many checkout attempts from this ip",
+                detail=ip_detail,
             )
 
         email_queue = _email_hits[normalized_email]
@@ -62,7 +93,7 @@ def enforce_public_guest_checkout_limits(
         if len(email_queue) >= EMAIL_MAX_REQUESTS:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="too many checkout attempts for this email",
+                detail=email_detail,
             )
 
         last_hit = _last_email_hit.get(normalized_email)
@@ -71,7 +102,7 @@ def enforce_public_guest_checkout_limits(
             if elapsed < EMAIL_MIN_INTERVAL_SECONDS:
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="please wait before retrying checkout",
+                    detail=interval_detail,
                 )
 
         ip_queue.append(now)

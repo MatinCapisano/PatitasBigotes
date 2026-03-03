@@ -29,6 +29,15 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
+def ensure_password_policy(password: str) -> None:
+    normalized = str(password or "")
+    if len(normalized) < 8:
+        raise ValueError("password must be at least 8 characters long")
+    has_special = any(not ch.isalnum() and not ch.isspace() for ch in normalized)
+    if not has_special:
+        raise ValueError("password must include at least one special character")
+
+
 def obtener_config_jwt() -> dict:
     secret_key = os.getenv("JWT_SECRET", "").strip()
     algorithm = os.getenv("JWT_ALGORITHM", DEFAULT_ALGORITHM).strip()

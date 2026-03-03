@@ -84,6 +84,25 @@ class SecurityTests(unittest.TestCase):
             if previous is not None:
                 os.environ["ACCESS_TOKEN_EXPIRE_MINUTES"] = previous
 
+    def test_password_policy_requires_minimum_length(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            security.ensure_password_policy("Ab$12")
+        self.assertEqual(
+            str(ctx.exception),
+            "password must be at least 8 characters long",
+        )
+
+    def test_password_policy_requires_special_character(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            security.ensure_password_policy("Abcdef12")
+        self.assertEqual(
+            str(ctx.exception),
+            "password must include at least one special character",
+        )
+
+    def test_password_policy_accepts_valid_password(self) -> None:
+        security.ensure_password_policy("Abcdef1!")
+
 
 if __name__ == "__main__":
     unittest.main()

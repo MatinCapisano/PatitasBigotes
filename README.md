@@ -17,6 +17,19 @@ Run from `backend/`:
 python -m source.db.init_db
 ```
 
+## Guest checkout idempotency
+
+`POST /checkout/guest` now requires header `Idempotency-Key`.
+
+Behavior:
+
+1. New key in scope `checkout_guest:<normalized_email>`: creates order (`201`).
+2. Same key + same payload in same scope: replays original response (`201`), no new order.
+3. Same key + different payload in same scope: returns `409 Conflict`.
+4. Same key while the first request is still being processed: returns `409 Conflict`.
+
+Idempotency records are stored in `idempotency_records` and expire after 24 hours.
+
 ## Product price migration (product -> variants)
 
 Catalog product endpoints now expose `min_var_price` instead of `price`.

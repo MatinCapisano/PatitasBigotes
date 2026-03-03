@@ -69,6 +69,33 @@ def _variant_to_dict(variant: ProductVariant) -> dict:
     }
 
 
+def _variant_to_storefront_dict(variant: ProductVariant) -> dict:
+    return {
+        "id": int(variant.id),
+        "size": variant.size,
+        "color": variant.color,
+        "price": int(variant.price),
+        "in_stock": int(variant.stock) > 0,
+    }
+
+
+def _product_to_storefront_dict(
+    *,
+    product: Product,
+    min_var_price: int | None,
+    active_stock_sum: int,
+) -> dict:
+    return {
+        "id": int(product.id),
+        "name": product.name,
+        "description": product.description,
+        "category_id": int(product.category_id),
+        "category_name": product.category.name if product.category is not None else None,
+        "min_var_price": None if min_var_price is None else int(min_var_price),
+        "in_stock": int(active_stock_sum or 0) > 0,
+    }
+
+
 def _category_to_dict(category: Category) -> dict:
     return {
         "id": int(category.id),
@@ -337,6 +364,119 @@ def list_categories(db: Session | None = None) -> list[dict]:
     with _read_session_scope(db) as (session, _):
         categories = session.query(Category).order_by(Category.id.asc()).all()
         return [_category_to_dict(category) for category in categories]
+
+
+def list_storefront_categories(db: Session | None = None) -> list[dict]:
+    return list_categories(db=db)
+
+
+def list_storefront_products(
+    *,
+    db: Session | None = None,
+    category_id: int | None = None,
+    min_price: int | None = None,
+    max_price: int | None = None,
+    sort_by: Literal["price", "name", "created_at"] = "created_at",
+    sort_order: Literal["asc", "desc"] = "desc",
+    limit: int = 24,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    safe_limit = max(1, min(int(limit), 100))
+    safe_offset = max(0, int(offset))
+
+    with _read_session_scope(db) as (session, _):
+        aggregates_subquery = (
+            session.query(
+                ProductVariant.product_id.label("product_id"),
+                func.min(ProductVariant.price).label("min_var_price"),
+                func.sum(ProductVariant.stock).label("active_stock_sum"),
+                func.count(ProductVariant.id).label("active_variant_count"),
+            )
+            .filter(ProductVariant.is_active.is_(True))
+            .group_by(ProductVariant.product_id)
+            .subquery()
+        )
+
+        query = (
+            session.query(
+                Product,
+                aggregates_subquery.c.min_var_price,
+                aggregates_subquery.c.active_stock_sum,
+            )
+            .join(
+                aggregates_subquery,
+                Product.id == aggregates_subquery.c.product_id,
+            )
+            .options(joinedload(Product.category))
+            .filter(aggregates_subquery.c.active_variant_count > 0)
+        )
+
+        if category_id is not None:
+            query = query.filter(Product.category_id == int(category_id))
+        if min_price is not None:
+            query = query.filter(aggregates_subquery.c.min_var_price >= int(min_price))
+        if max_price is not None:
+            query = query.filter(aggregates_subquery.c.min_var_price <= int(max_price))
+
+        total = int(query.count())
+
+        if sort_by == "price":
+            column = aggregates_subquery.c.min_var_price
+        elif sort_by == "name":
+            column = Product.name
+        else:
+            # Product currently has no created_at; id is used as insertion-order proxy.
+            column = Product.id
+
+        query = query.order_by(desc(column) if sort_order == "desc" else asc(column))
+        rows = query.offset(safe_offset).limit(safe_limit).all()
+
+        data = [
+            _product_to_storefront_dict(
+                product=product,
+                min_var_price=min_var_price,
+                active_stock_sum=int(active_stock_sum or 0),
+            )
+            for product, min_var_price, active_stock_sum in rows
+        ]
+        return data, total
+
+
+def get_storefront_product_by_id(product_id: int, db: Session | None = None) -> dict | None:
+    with _read_session_scope(db) as (session, _):
+        product = (
+            session.query(Product)
+            .options(
+                joinedload(Product.category),
+                joinedload(Product.variants),
+            )
+            .filter(Product.id == product_id)
+            .first()
+        )
+        if product is None:
+            return None
+
+        active_variants = [
+            variant
+            for variant in product.variants
+            if bool(variant.is_active)
+        ]
+        if not active_variants:
+            return None
+
+        min_var_price = min(int(variant.price) for variant in active_variants)
+        active_stock_sum = sum(int(variant.stock) for variant in active_variants)
+
+        payload = _product_to_storefront_dict(
+            product=product,
+            min_var_price=min_var_price,
+            active_stock_sum=active_stock_sum,
+        )
+        payload["variants"] = [
+            _variant_to_storefront_dict(variant)
+            for variant in sorted(active_variants, key=lambda row: int(row.id))
+        ]
+        return payload
 
 
 def get_category_by_id(category_id: int, db: Session | None = None) -> dict | None:

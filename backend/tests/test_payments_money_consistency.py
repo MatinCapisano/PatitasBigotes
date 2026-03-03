@@ -171,6 +171,57 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
         finally:
             session.close()
 
+    def test_webhook_cancelled_payment_does_not_cancel_order(self) -> None:
+        order_id, user_id = self._seed_submitted_order_with_reservation()
+        session = self.TestSession()
+        try:
+            payment = Payment(
+                order_id=order_id,
+                method="mercadopago",
+                status="pending",
+                amount=10000,
+                currency="ARS",
+                idempotency_key=f"idemp-mp-cancel-{datetime.utcnow().timestamp()}",
+                external_ref=f"mp-order-{order_id}-pay-1",
+                provider_status="preference_created",
+                provider_payload=None,
+                receipt_url=None,
+                expires_at=datetime.utcnow() + timedelta(hours=1),
+                paid_at=None,
+            )
+            session.add(payment)
+            session.flush()
+
+            updated = apply_mercadopago_normalized_state(
+                payment_id=int(payment.id),
+                normalized_state={
+                    "provider_status": "cancelled",
+                    "internal_status": "cancelled",
+                    "external_reference": payment.external_ref,
+                    "amount": 10000,
+                    "currency": "ARS",
+                    "provider_payment_id": "321",
+                },
+                db=session,
+            )
+
+            order = session.query(Order).filter(Order.id == order_id).first()
+            reservation = (
+                session.query(StockReservation)
+                .filter(
+                    StockReservation.order_id == order_id,
+                    StockReservation.status == "active",
+                )
+                .first()
+            )
+        finally:
+            session.close()
+
+        self.assertEqual(updated["status"], "cancelled")
+        self.assertIsNotNone(order)
+        self.assertEqual(order.status, "submitted")
+        self.assertIsNotNone(reservation)
+
 
 if __name__ == "__main__":
     unittest.main()

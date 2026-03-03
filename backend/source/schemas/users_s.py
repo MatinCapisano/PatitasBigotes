@@ -6,7 +6,7 @@ class CreateUserRequest(BaseModel):
     first_name: str
     last_name: str
     email: EmailStr
-    password: str
+    password: str = Field(min_length=8)
 
 
 class CreateGuestUserRequest(BaseModel):
