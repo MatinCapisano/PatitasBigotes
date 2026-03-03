@@ -167,7 +167,6 @@ class Order(Base):
     submitted_at = Column(DateTime, nullable=True)
     paid_at = Column(DateTime, nullable=True)
     cancelled_at = Column(DateTime, nullable=True)
-    expires_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 

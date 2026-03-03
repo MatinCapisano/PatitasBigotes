@@ -35,7 +35,11 @@ from source.services.idempotency_s import (
     normalize_idempotency_key,
     prune_expired_records,
 )
-from source.services.payment_s import create_payment_for_order, list_payments_for_order
+from source.services.payment_s import (
+    create_payment_for_order,
+    create_retry_payment_for_order,
+    list_payments_for_order,
+)
 
 router = APIRouter()
 
@@ -228,30 +232,6 @@ def get_order(
     return {"data": order}
 
 
-@router.post("/orders/{order_id}/pay")
-def pay_order_endpoint(
-    order_id: int,
-    payload: PayOrderRequest,
-    admin_user: dict = Depends(require_admin),
-    db: Session = Depends(get_db_transactional),
-):
-    admin_user_id = get_current_user_id(admin_user)
-    try:
-        order = change_order_status(
-            user_id=admin_user_id,
-            order_id=order_id,
-            new_status="paid",
-            is_admin=True,
-            payment_ref=payload.payment_ref,
-            paid_amount=int(payload.paid_amount),
-            db=db,
-        )
-    except Exception as exc:
-        raise_http_error_from_exception(exc, db=db)
-
-    return {"data": order}
-
-
 @router.post("/admin/orders/{order_id}/pay/manual")
 def admin_manual_pay_order_endpoint(
     order_id: int,
@@ -320,6 +300,29 @@ def list_order_payments(
         raise_http_error_from_exception(exc, db=db)
 
     return {"data": payments}
+
+
+@router.post("/orders/{order_id}/payments/retry", status_code=status.HTTP_201_CREATED)
+def retry_order_payment(
+    order_id: int,
+    payload: CreateOrderPaymentRequest,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db_transactional),
+):
+    user_id = get_current_user_id(current_user)
+    try:
+        payment = create_retry_payment_for_order(
+            order_id=order_id,
+            method=payload.method,
+            db=db,
+            user_id=user_id,
+            currency=payload.currency,
+            expires_in_minutes=payload.expires_in_minutes,
+        )
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+
+    return {"data": payment}
 
 
 @router.get("/orders/{order_id}/reservations")

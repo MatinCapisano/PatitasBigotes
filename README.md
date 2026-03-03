@@ -30,6 +30,34 @@ Behavior:
 
 Idempotency records are stored in `idempotency_records` and expire after 24 hours.
 
+## Stock reservations expiration job
+
+For production-like latency, reservation expiration should run outside request paths.
+
+Run once:
+
+```bash
+python -m source.jobs.expire_stock_reservations_job --once
+```
+
+Run periodically (default every 180 minutes):
+
+```bash
+python -m source.jobs.expire_stock_reservations_job
+```
+
+Override interval:
+
+```bash
+python -m source.jobs.expire_stock_reservations_job --interval-minutes 240
+```
+
+Or via env var:
+
+```bash
+STOCK_RESERVATIONS_JOB_INTERVAL_MINUTES=240
+```
+
 ## Product price migration (product -> variants)
 
 Catalog product endpoints now expose `min_var_price` instead of `price`.

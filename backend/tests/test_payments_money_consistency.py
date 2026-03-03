@@ -24,6 +24,7 @@ from source.db.models import (
 from source.services.payment_s import (
     apply_mercadopago_normalized_state,
     create_payment_for_order,
+    create_retry_payment_for_order,
 )
 
 
@@ -135,6 +136,23 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
             session.close()
         self.assertEqual(payment["amount"], 10000)
 
+    def test_create_payment_rejects_non_ars_currency(self) -> None:
+        order_id, user_id = self._seed_submitted_order_with_reservation()
+        session = self.TestSession()
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                create_payment_for_order(
+                    order_id=order_id,
+                    method="bank_transfer",
+                    db=session,
+                    user_id=user_id,
+                    idempotency_key=f"idemp-usd-{datetime.utcnow().timestamp()}",
+                    currency="USD",
+                )
+            self.assertEqual(str(ctx.exception), "only ARS currency is supported")
+        finally:
+            session.close()
+
     def test_webhook_amount_mismatch_raises(self) -> None:
         order_id, user_id = self._seed_submitted_order_with_reservation()
         session = self.TestSession()
@@ -221,6 +239,78 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
         self.assertIsNotNone(order)
         self.assertEqual(order.status, "submitted")
         self.assertIsNotNone(reservation)
+
+    def test_retry_payment_creates_new_attempt_after_cancelled(self) -> None:
+        order_id, user_id = self._seed_submitted_order_with_reservation()
+        session = self.TestSession()
+        try:
+            cancelled = Payment(
+                order_id=order_id,
+                method="bank_transfer",
+                status="cancelled",
+                amount=10000,
+                currency="ARS",
+                idempotency_key=f"idemp-bt-cancelled-{datetime.utcnow().timestamp()}",
+                external_ref=f"bt-order-{order_id}-pay-9",
+                provider_status="cancelled",
+                provider_payload=None,
+                receipt_url=None,
+                expires_at=datetime.utcnow() + timedelta(hours=1),
+                paid_at=None,
+            )
+            session.add(cancelled)
+            session.flush()
+            cancelled_id = int(cancelled.id)
+
+            retried = create_retry_payment_for_order(
+                order_id=order_id,
+                method="bank_transfer",
+                db=session,
+                user_id=user_id,
+                currency="ARS",
+                expires_in_minutes=60,
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        self.assertNotEqual(int(retried["id"]), cancelled_id)
+        self.assertEqual(retried["status"], "pending")
+        self.assertEqual(retried["method"], "bank_transfer")
+
+    def test_retry_payment_requires_retryable_latest_status(self) -> None:
+        order_id, user_id = self._seed_submitted_order_with_reservation()
+        session = self.TestSession()
+        try:
+            pending = Payment(
+                order_id=order_id,
+                method="bank_transfer",
+                status="pending",
+                amount=10000,
+                currency="ARS",
+                idempotency_key=f"idemp-bt-pending-{datetime.utcnow().timestamp()}",
+                external_ref=None,
+                provider_status="pending",
+                provider_payload=None,
+                receipt_url=None,
+                expires_at=datetime.utcnow() + timedelta(hours=1),
+                paid_at=None,
+            )
+            session.add(pending)
+            session.flush()
+
+            with self.assertRaises(ValueError) as ctx:
+                create_retry_payment_for_order(
+                    order_id=order_id,
+                    method="bank_transfer",
+                    db=session,
+                    user_id=user_id,
+                    currency="ARS",
+                    expires_in_minutes=60,
+                )
+            self.assertEqual(str(ctx.exception), "latest payment attempt is not retryable")
+        finally:
+            session.close()
 
 
 if __name__ == "__main__":

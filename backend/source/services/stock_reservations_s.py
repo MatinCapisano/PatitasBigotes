@@ -109,7 +109,20 @@ def _cancel_pending_payments_for_order(order_id: int, *, now: datetime, db: Sess
 
 
 def expire_active_reservations(now: datetime, db: Session) -> int:
-    expiring_reservations = (
+    return _expire_active_reservations_internal(now=now, db=db, order_id=None)
+
+
+def expire_active_reservations_for_order(*, order_id: int, now: datetime, db: Session) -> int:
+    return _expire_active_reservations_internal(now=now, db=db, order_id=order_id)
+
+
+def _expire_active_reservations_internal(
+    *,
+    now: datetime,
+    db: Session,
+    order_id: int | None,
+) -> int:
+    query = (
         db.query(StockReservation)
         .filter(
             StockReservation.status == RESERVATION_ACTIVE,
@@ -117,8 +130,10 @@ def expire_active_reservations(now: datetime, db: Session) -> int:
         )
         .order_by(StockReservation.order_id.asc(), StockReservation.id.asc())
         .with_for_update()
-        .all()
     )
+    if order_id is not None:
+        query = query.filter(StockReservation.order_id == order_id)
+    expiring_reservations = query.all()
     if not expiring_reservations:
         return 0
 
@@ -187,7 +202,7 @@ def expire_active_reservations(now: datetime, db: Session) -> int:
 
 def reserve_stock_for_submitted_order(order_id: int, db: Session) -> list[dict]:
     now = datetime.utcnow()
-    expire_active_reservations(now=now, db=db)
+    expire_active_reservations_for_order(order_id=order_id, now=now, db=db)
     order, items = _lock_order_items_for_order(order_id=order_id, db=db)
     if order.status not in {"draft", "submitted"}:
         raise ValueError("stock can only be reserved for draft/submitted orders")
@@ -249,7 +264,7 @@ def reserve_stock_for_submitted_order(order_id: int, db: Session) -> list[dict]:
 
 def consume_reservations_for_paid_order(order_id: int, db: Session) -> list[dict]:
     now = datetime.utcnow()
-    expire_active_reservations(now=now, db=db)
+    expire_active_reservations_for_order(order_id=order_id, now=now, db=db)
     order, _ = _lock_order_items_for_order(order_id=order_id, db=db)
     if order.status not in {"submitted", "paid"}:
         raise ValueError("order can only be paid from submitted status")
@@ -308,7 +323,7 @@ def release_reservations_for_cancelled_order(
     db: Session,
 ) -> int:
     now = datetime.utcnow()
-    expire_active_reservations(now=now, db=db)
+    expire_active_reservations_for_order(order_id=order_id, now=now, db=db)
     _, _ = _lock_order_items_for_order(order_id=order_id, db=db)
     active_reservations = (
         db.query(StockReservation)
@@ -330,7 +345,7 @@ def release_reservations_for_cancelled_order(
 
 def list_active_reservations_for_order(order_id: int, db: Session) -> list[dict]:
     now = datetime.utcnow()
-    expire_active_reservations(now=now, db=db)
+    expire_active_reservations_for_order(order_id=order_id, now=now, db=db)
     rows = (
         db.query(StockReservation)
         .filter(
@@ -345,7 +360,7 @@ def list_active_reservations_for_order(order_id: int, db: Session) -> list[dict]
 
 def list_reservations_for_order(order_id: int, db: Session) -> list[dict]:
     now = datetime.utcnow()
-    expire_active_reservations(now=now, db=db)
+    expire_active_reservations_for_order(order_id=order_id, now=now, db=db)
     rows = (
         db.query(StockReservation)
         .filter(StockReservation.order_id == order_id)

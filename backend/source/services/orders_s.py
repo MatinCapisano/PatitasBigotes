@@ -14,7 +14,7 @@ from source.services.discount_s import (
 from source.services.payment_s import confirm_manual_payment_for_order
 from source.services.products_s import get_product_by_id
 from source.services.stock_reservations_s import (
-    expire_active_reservations,
+    expire_active_reservations_for_order,
     list_reservations_for_order,
     release_reservations_for_cancelled_order,
     reserve_stock_for_submitted_order,
@@ -320,7 +320,7 @@ def change_order_status(
     payment_ref: str | None = None,
     paid_amount: int | None = None,
 ) -> dict:
-    expire_active_reservations(now=_utc_now(), db=db)
+    expire_active_reservations_for_order(order_id=order_id, now=_utc_now(), db=db)
 
     if new_status not in ALLOWED_ORDER_STATUS:
         raise ValueError("invalid status")
@@ -521,7 +521,7 @@ def get_order_reservations_for_user(
     is_admin: bool,
     db: Session,
 ) -> list[dict]:
-    expire_active_reservations(now=_utc_now(), db=db)
+    expire_active_reservations_for_order(order_id=order_id, now=_utc_now(), db=db)
     query = _order_query(db).filter(Order.id == order_id)
     if not is_admin:
         query = query.filter(Order.user_id == user_id)

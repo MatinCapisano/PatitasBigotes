@@ -1,12 +1,13 @@
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from source.services.discount_s import get_applicable_discounts_for_product
+from source.services.discount_s import get_applicable_discounts_for_product, is_discount_currently_valid
 
 
 class DiscountsCategoryScopeTests(unittest.TestCase):
@@ -56,6 +57,25 @@ class DiscountsCategoryScopeTests(unittest.TestCase):
         ]
         applicable = get_applicable_discounts_for_product(product=product, discounts=discounts)
         self.assertEqual(len(applicable), 0)
+
+    def test_is_discount_currently_valid_handles_mixed_timezone_inputs(self) -> None:
+        discount = {
+            "id": 9,
+            "name": "TZ promo",
+            "type": "percent",
+            "value": 10,
+            "scope": "all",
+            "scope_value": None,
+            "is_active": True,
+            "starts_at": "2026-01-01T00:00:00Z",
+            "ends_at": datetime(2026, 12, 31, 23, 59, 59),  # naive on purpose
+            "product_ids": [],
+        }
+        result = is_discount_currently_valid(
+            discount=discount,
+            at=datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+        )
+        self.assertTrue(result)
 
 
 if __name__ == "__main__":

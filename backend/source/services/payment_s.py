@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import hashlib
 import json
+import uuid
 
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
@@ -20,11 +21,12 @@ from source.services.mercadopago_client import create_checkout_preference
 from source.services.money_s import parse_amount_to_cents
 from source.services.stock_reservations_s import (
     consume_reservations_for_paid_order,
-    expire_active_reservations,
+    expire_active_reservations_for_order,
     list_active_reservations_for_order,
 )
 
 ALLOWED_PAYMENT_METHODS = {"bank_transfer", "mercadopago"}
+RETRYABLE_PAYMENT_STATUSES = {"cancelled", "expired"}
 MERCADOPAGO_PROVIDER_TO_INTERNAL_STATUS = {
     "approved": "paid",
     "accredited": "paid",
@@ -498,8 +500,6 @@ def apply_mercadopago_normalized_state(
     notification_payload: dict | None = None,
     db: Session,
 ) -> dict:
-    expire_active_reservations(now=datetime.utcnow(), db=db)
-
     if not isinstance(normalized_state, dict):
         raise ValueError("normalized_state is required")
 
@@ -531,6 +531,11 @@ def apply_mercadopago_normalized_state(
     order = payment.order
     if order is None:
         raise LookupError("order not found")
+    expire_active_reservations_for_order(
+        order_id=int(order.id),
+        now=now,
+        db=db,
+    )
 
     payment_external_ref = _normalize_optional_str(payment.external_ref)
     if payment_external_ref != external_reference:
@@ -596,7 +601,11 @@ def create_payment_for_order(
     currency: str | None = None,
     expires_in_minutes: int = 60,
 ) -> dict:
-    expire_active_reservations(now=datetime.utcnow(), db=db)
+    expire_active_reservations_for_order(
+        order_id=order_id,
+        now=datetime.utcnow(),
+        db=db,
+    )
 
     if method not in ALLOWED_PAYMENT_METHODS:
         raise ValueError("invalid payment method")
@@ -605,6 +614,8 @@ def create_payment_for_order(
     normalized_key = idempotency_key.strip()
     if not normalized_key:
         raise ValueError("idempotency_key is required")
+    if currency is not None and str(currency).strip().upper() != "ARS":
+        raise ValueError("only ARS currency is supported")
 
     existing_payment = (
         db.query(Payment)
@@ -656,7 +667,10 @@ def create_payment_for_order(
         method=method,
         now=now,
     )
-    payment_currency = currency or order.currency or "ARS"
+    order_currency = str(order.currency or "ARS").strip().upper()
+    if order_currency != "ARS":
+        raise ValueError("only ARS currency is supported")
+    payment_currency = "ARS"
     if active_pending_payment is not None:
         _validate_active_pending_compatibility(
             active_pending_payment,
@@ -749,6 +763,43 @@ def create_payment_for_order(
     return _payment_to_dict(payment)
 
 
+def create_retry_payment_for_order(
+    order_id: int,
+    method: str,
+    db: Session,
+    *,
+    user_id: int,
+    currency: str | None = None,
+    expires_in_minutes: int = 60,
+) -> dict:
+    latest_attempt = (
+        db.query(Payment)
+        .join(Order, Payment.order_id == Order.id)
+        .filter(
+            Payment.order_id == order_id,
+            Payment.method == method,
+            Order.user_id == user_id,
+        )
+        .order_by(Payment.created_at.desc(), Payment.id.desc())
+        .first()
+    )
+    if latest_attempt is None:
+        raise ValueError("no previous payment attempt found for this method")
+    if str(latest_attempt.status) not in RETRYABLE_PAYMENT_STATUSES:
+        raise ValueError("latest payment attempt is not retryable")
+
+    retry_key = f"retry-order-{order_id}-{method}-{uuid.uuid4().hex}"
+    return create_payment_for_order(
+        order_id=order_id,
+        method=method,
+        db=db,
+        user_id=user_id,
+        idempotency_key=retry_key,
+        currency=currency,
+        expires_in_minutes=expires_in_minutes,
+    )
+
+
 def _build_manual_payment_idempotency_key(order_id: int, payment_ref: str) -> str:
     digest = hashlib.sha256(payment_ref.encode("utf-8")).hexdigest()[:16]
     return f"manual-order-{order_id}-{digest}"
@@ -762,7 +813,11 @@ def confirm_manual_payment_for_order(
     paid_amount: int,
     db: Session,
 ) -> dict:
-    expire_active_reservations(now=datetime.utcnow(), db=db)
+    expire_active_reservations_for_order(
+        order_id=order_id,
+        now=datetime.utcnow(),
+        db=db,
+    )
 
     normalized_ref = payment_ref.strip()
     if not normalized_ref:

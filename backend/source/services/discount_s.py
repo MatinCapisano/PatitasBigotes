@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Iterable, TypedDict
 
@@ -29,10 +29,17 @@ class DiscountDTO(TypedDict):
 
 def _coerce_datetime(value) -> datetime | None:
     if value is None or isinstance(value, datetime):
-        return value
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
     if isinstance(value, str):
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
         except ValueError:
             return None
     return None
@@ -237,7 +244,12 @@ def _validate_discount_payload(payload: dict, *, db: Session) -> None:
 
 
 def is_discount_currently_valid(discount: DiscountDTO, at: datetime | None = None) -> bool:
-    now = at or datetime.utcnow()
+    if at is None:
+        now = datetime.now(timezone.utc)
+    elif at.tzinfo is None:
+        now = at.replace(tzinfo=timezone.utc)
+    else:
+        now = at.astimezone(timezone.utc)
     if not discount.get("is_active", False):
         return False
 
