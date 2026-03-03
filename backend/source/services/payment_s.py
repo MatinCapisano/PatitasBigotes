@@ -51,6 +51,7 @@ ALLOWED_PAYMENT_TRANSITIONS = {
 
 
 def _payment_to_dict(payment: Payment) -> dict:
+    parsed_provider_payload = _deserialize_provider_payload(payment.provider_payload)
     return {
         "id": payment.id,
         "order_id": payment.order_id,
@@ -63,6 +64,7 @@ def _payment_to_dict(payment: Payment) -> dict:
         "preference_id": payment.preference_id,
         "provider_status": payment.provider_status,
         "provider_payload": payment.provider_payload,
+        "provider_payload_data": parsed_provider_payload,
         "receipt_url": payment.receipt_url,
         "expires_at": payment.expires_at,
         "paid_at": payment.paid_at,
@@ -1242,4 +1244,75 @@ def get_payment_for_user(
         raise LookupError("payment not found")
 
     return _payment_to_dict(payment)
+
+
+def submit_bank_transfer_receipt(
+    *,
+    order_id: int,
+    payment_id: int,
+    user_id: int,
+    receipt_url: str,
+    db: Session,
+) -> dict:
+    normalized_receipt_url = str(receipt_url or "").strip()
+    if not normalized_receipt_url:
+        raise ValueError("receipt_url is required")
+
+    payment = (
+        db.query(Payment)
+        .join(Order, Payment.order_id == Order.id)
+        .filter(
+            Payment.id == int(payment_id),
+            Payment.order_id == int(order_id),
+            Order.user_id == int(user_id),
+        )
+        .with_for_update()
+        .first()
+    )
+    if payment is None:
+        raise LookupError("payment not found")
+    if str(payment.method) != "bank_transfer":
+        raise ValueError("receipt upload is only supported for bank_transfer")
+    if str(payment.status) != "pending":
+        raise ValueError("receipt can only be submitted for pending bank_transfer payments")
+
+    payload = _deserialize_provider_payload(payment.provider_payload) or {}
+    payload["receipt"] = {
+        "url": normalized_receipt_url,
+        "submitted_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    }
+    payment.receipt_url = normalized_receipt_url
+    payment.provider_payload = _serialize_provider_payload(payload)
+    db.flush()
+    db.refresh(payment)
+    return _payment_to_dict(payment)
+
+
+def list_pending_bank_transfer_payments_for_admin(
+    *,
+    db: Session,
+    limit: int = 100,
+) -> list[dict]:
+    safe_limit = max(1, min(int(limit), 500))
+    rows = (
+        db.query(Payment)
+        .join(Order, Payment.order_id == Order.id)
+        .options(joinedload(Payment.order))
+        .filter(
+            Payment.method == "bank_transfer",
+            Payment.status == "pending",
+            Order.status == "submitted",
+        )
+        .order_by(Payment.created_at.desc(), Payment.id.desc())
+        .limit(safe_limit)
+        .all()
+    )
+    result: list[dict] = []
+    for payment in rows:
+        item = _payment_to_dict(payment)
+        order = payment.order
+        item["order_status"] = order.status if order is not None else None
+        item["user_id"] = int(order.user_id) if order is not None else None
+        result.append(item)
+    return result
 

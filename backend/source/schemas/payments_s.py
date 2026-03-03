@@ -15,3 +15,8 @@ class CreateOrderPaymentRequest(BaseModel):
 class AdminWebhookReplayRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     event_key: str = Field(min_length=1, max_length=255)
+
+
+class SubmitBankTransferReceiptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    receipt_url: str = Field(min_length=5, max_length=1000)

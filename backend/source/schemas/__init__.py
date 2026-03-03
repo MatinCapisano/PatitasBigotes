@@ -14,7 +14,11 @@ from source.schemas.orders_s import (
     PublicGuestCheckoutRequest,
     UpdateOrderStatusRequest,
 )
-from source.schemas.payments_s import AdminWebhookReplayRequest, CreateOrderPaymentRequest
+from source.schemas.payments_s import (
+    AdminWebhookReplayRequest,
+    CreateOrderPaymentRequest,
+    SubmitBankTransferReceiptRequest,
+)
 from source.schemas.products_s import (
     CreateCategoryRequest,
     CreateProductRequest,
@@ -56,6 +60,7 @@ __all__ = [
     "PayOrderRequest",
     "CreateOrderPaymentRequest",
     "AdminWebhookReplayRequest",
+    "SubmitBankTransferReceiptRequest",
     "CreateCategoryRequest",
     "CreateProductRequest",
     "CreateVariantRequest",

@@ -12,6 +12,7 @@ from source.schemas import (
     CreateOrderPaymentRequest,
     PayOrderRequest,
     PublicGuestCheckoutRequest,
+    SubmitBankTransferReceiptRequest,
     UpdateOrderStatusRequest,
 )
 from source.services.orders_s import (
@@ -39,6 +40,7 @@ from source.services.payment_s import (
     create_payment_for_order,
     create_retry_payment_for_order,
     list_payments_for_order,
+    submit_bank_transfer_receipt,
 )
 
 router = APIRouter()
@@ -323,6 +325,28 @@ def retry_order_payment(
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
 
+    return {"data": payment}
+
+
+@router.post("/orders/{order_id}/payments/{payment_id}/bank-transfer/receipt")
+def submit_bank_transfer_payment_receipt(
+    order_id: int,
+    payment_id: int,
+    payload: SubmitBankTransferReceiptRequest,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db_transactional),
+):
+    user_id = get_current_user_id(current_user)
+    try:
+        payment = submit_bank_transfer_receipt(
+            order_id=order_id,
+            payment_id=payment_id,
+            user_id=user_id,
+            receipt_url=payload.receipt_url,
+            db=db,
+        )
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
     return {"data": payment}
 
 

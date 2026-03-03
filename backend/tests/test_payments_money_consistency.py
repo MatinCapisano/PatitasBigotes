@@ -26,6 +26,7 @@ from source.services.payment_s import (
     create_payment_for_order,
     create_retry_payment_for_order,
     find_payment_for_mercadopago_event,
+    submit_bank_transfer_receipt,
 )
 
 
@@ -136,6 +137,8 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
         finally:
             session.close()
         self.assertEqual(payment["amount"], 10000)
+        self.assertIn("provider_payload_data", payment)
+        self.assertIsInstance(payment["provider_payload_data"], dict)
 
     def test_create_payment_rejects_non_ars_currency(self) -> None:
         order_id, user_id = self._seed_submitted_order_with_reservation()
@@ -345,6 +348,34 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
             self.assertEqual(found["id"], int(payment.id))
         finally:
             session.close()
+
+    def test_submit_bank_transfer_receipt_updates_payment(self) -> None:
+        order_id, user_id = self._seed_submitted_order_with_reservation()
+        session = self.TestSession()
+        try:
+            payment = create_payment_for_order(
+                order_id=order_id,
+                method="bank_transfer",
+                db=session,
+                user_id=user_id,
+                idempotency_key=f"idemp-receipt-{datetime.now(UTC).timestamp()}",
+                currency="ARS",
+            )
+            updated = submit_bank_transfer_receipt(
+                order_id=order_id,
+                payment_id=int(payment["id"]),
+                user_id=user_id,
+                receipt_url="https://example.com/receipt-1.jpg",
+                db=session,
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        self.assertEqual(updated["receipt_url"], "https://example.com/receipt-1.jpg")
+        payload_data = updated.get("provider_payload_data") or {}
+        self.assertIn("receipt", payload_data)
+        self.assertEqual(payload_data["receipt"]["url"], "https://example.com/receipt-1.jpg")
 
 
 if __name__ == "__main__":
