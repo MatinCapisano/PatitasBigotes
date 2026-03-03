@@ -108,8 +108,8 @@ def _cancel_pending_payments_for_order(order_id: int, *, now: datetime, db: Sess
     )
 
 
-def expire_active_reservations(now: datetime, db: Session) -> int:
-    return _expire_active_reservations_internal(now=now, db=db, order_id=None)
+def expire_active_reservations(now: datetime, db: Session, *, limit: int | None = None) -> int:
+    return _expire_active_reservations_internal(now=now, db=db, order_id=None, limit=limit)
 
 
 def expire_active_reservations_for_order(*, order_id: int, now: datetime, db: Session) -> int:
@@ -121,6 +121,7 @@ def _expire_active_reservations_internal(
     now: datetime,
     db: Session,
     order_id: int | None,
+    limit: int | None = None,
 ) -> int:
     query = (
         db.query(StockReservation)
@@ -133,6 +134,8 @@ def _expire_active_reservations_internal(
     )
     if order_id is not None:
         query = query.filter(StockReservation.order_id == order_id)
+    if limit is not None:
+        query = query.limit(max(1, int(limit)))
     expiring_reservations = query.all()
     if not expiring_reservations:
         return 0

@@ -65,7 +65,7 @@ Run once:
 python -m source.jobs.expire_stock_reservations_job --once
 ```
 
-Run periodically (default every 180 minutes):
+Run periodically (default every 60 minutes):
 
 ```bash
 python -m source.jobs.expire_stock_reservations_job
@@ -77,10 +77,18 @@ Override interval:
 python -m source.jobs.expire_stock_reservations_job --interval-minutes 240
 ```
 
+Override batching behavior:
+
+```bash
+python -m source.jobs.expire_stock_reservations_job --batch-limit 200 --max-batches 20
+```
+
 Or via env var:
 
 ```bash
 STOCK_RESERVATIONS_JOB_INTERVAL_MINUTES=240
+STOCK_RESERVATIONS_JOB_BATCH_LIMIT=200
+STOCK_RESERVATIONS_JOB_MAX_BATCHES=20
 ```
 
 ## Product price migration (product -> variants)
