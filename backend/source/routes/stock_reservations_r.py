@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -17,7 +17,9 @@ def expire_stock_reservations(
     db: Session = Depends(get_db_transactional),
 ):
     try:
-        expired_count = expire_active_reservations(now=datetime.utcnow(), db=db)
+        expired_count = expire_active_reservations(now=datetime.now(UTC), db=db)
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
     return {"data": {"expired_count": int(expired_count)}}
+
+

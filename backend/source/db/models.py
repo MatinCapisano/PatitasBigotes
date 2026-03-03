@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import UTC, datetime
 
 from sqlalchemy import (
     Boolean,
@@ -15,6 +15,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 class Category(Base):
@@ -85,8 +88,10 @@ class User(Base):
     token_version = Column(Integer, nullable=False, default=1)
 
     is_admin = Column(Boolean, default=False, nullable=False)
+    email_verified_at = Column(DateTime(timezone=True), nullable=True)
+    email_verification_sent_at = Column(DateTime(timezone=True), nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     orders = relationship("Order", back_populates="user")
     turns = relationship("Turn", back_populates="user")
@@ -94,6 +99,11 @@ class User(Base):
         "UserRefreshSession",
         back_populates="user",
         uselist=False,
+        cascade="all, delete-orphan",
+    )
+    auth_action_tokens = relationship(
+        "AuthActionToken",
+        back_populates="user",
         cascade="all, delete-orphan",
     )
 
@@ -112,9 +122,9 @@ class AuthLoginThrottle(Base):
     scope = Column(String, nullable=False, index=True)
     key = Column(String, nullable=False, index=True)
     failed_count = Column(Integer, nullable=False, default=0)
-    window_started_at = Column(DateTime, nullable=False)
-    blocked_until = Column(DateTime, nullable=True, index=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    window_started_at = Column(DateTime(timezone=True), nullable=False)
+    blocked_until = Column(DateTime(timezone=True), nullable=True, index=True)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
 class Turn(Base):
@@ -128,13 +138,13 @@ class Turn(Base):
         index=True,
     )
     status = Column(String, nullable=False, default="pending")
-    scheduled_at = Column(DateTime, nullable=True)
+    scheduled_at = Column(DateTime(timezone=True), nullable=True)
     notes = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at = Column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )
 
@@ -163,17 +173,17 @@ class Order(Base):
     discount_total = Column(Integer, nullable=False, default=0)
     total_amount = Column(Integer, nullable=False, default=0)
     pricing_frozen = Column(Boolean, nullable=False, default=False)
-    pricing_frozen_at = Column(DateTime, nullable=True)
-    submitted_at = Column(DateTime, nullable=True)
-    paid_at = Column(DateTime, nullable=True)
-    cancelled_at = Column(DateTime, nullable=True)
+    pricing_frozen_at = Column(DateTime(timezone=True), nullable=True)
+    submitted_at = Column(DateTime(timezone=True), nullable=True)
+    paid_at = Column(DateTime(timezone=True), nullable=True)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     updated_at = Column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )
 
@@ -280,14 +290,14 @@ class Payment(Base):
     provider_payload = Column(String, nullable=True)
     receipt_url = Column(String, nullable=True)
 
-    expires_at = Column(DateTime, nullable=True)
-    paid_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    paid_at = Column(DateTime(timezone=True), nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at = Column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )
 
@@ -312,12 +322,12 @@ class WebhookEvent(Base):
     event_key = Column(String, nullable=False, unique=True, index=True)
     status = Column(String, nullable=False, default="processing")
     payload = Column(Text, nullable=True)
-    received_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    processed_at = Column(DateTime, nullable=True)
+    received_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    processed_at = Column(DateTime(timezone=True), nullable=True)
     last_error = Column(Text, nullable=True)
     attempt_count = Column(Integer, nullable=False, default=0)
-    next_retry_at = Column(DateTime, nullable=True)
-    dead_letter_at = Column(DateTime, nullable=True)
+    next_retry_at = Column(DateTime(timezone=True), nullable=True)
+    dead_letter_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class StockReservation(Base):
@@ -363,15 +373,15 @@ class StockReservation(Base):
     quantity = Column(Integer, nullable=False)
     status = Column(String, nullable=False, default="active")
     reactivation_count = Column(Integer, nullable=False, default=0)
-    expires_at = Column(DateTime, nullable=False)
-    consumed_at = Column(DateTime, nullable=True)
-    released_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    consumed_at = Column(DateTime(timezone=True), nullable=True)
+    released_at = Column(DateTime(timezone=True), nullable=True)
     reason = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at = Column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )
 
@@ -384,6 +394,18 @@ class Discount(Base):
     __tablename__ = "discounts"
     __table_args__ = (
         CheckConstraint("value > 0", name="ck_discounts_value_positive"),
+        CheckConstraint(
+            "("
+            "(scope = 'all' AND category_id IS NULL AND product_id IS NULL)"
+            " OR "
+            "(scope = 'category' AND category_id IS NOT NULL AND product_id IS NULL)"
+            " OR "
+            "(scope = 'product' AND category_id IS NULL AND product_id IS NOT NULL)"
+            " OR "
+            "(scope = 'product_list' AND category_id IS NULL AND product_id IS NULL)"
+            ")",
+            name="ck_discounts_scope_target_consistency",
+        ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -393,17 +415,28 @@ class Discount(Base):
     value = Column(Integer, nullable=False)
 
     scope = Column(String, nullable=False)  # all | category | product | product_list
-    scope_value = Column(String, nullable=True)
+    category_id = Column(
+        Integer,
+        ForeignKey("categories.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    product_id = Column(
+        Integer,
+        ForeignKey("products.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     is_active = Column(Boolean, default=True, nullable=False)
-    starts_at = Column(DateTime, nullable=True)
-    ends_at = Column(DateTime, nullable=True)
+    starts_at = Column(DateTime(timezone=True), nullable=True)
+    ends_at = Column(DateTime(timezone=True), nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at = Column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )
 
@@ -446,8 +479,8 @@ class IdempotencyRecord(Base):
     request_hash = Column(String, nullable=False)
     response_payload = Column(Text, nullable=False)
     status = Column(String, nullable=False, default="completed")
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
 
 
 class UserRefreshSession(Base):
@@ -466,15 +499,43 @@ class UserRefreshSession(Base):
     claim_sub = Column(String, nullable=False)
     claim_type = Column(String, nullable=False)
     claim_iss = Column(String, nullable=False)
-    claim_iat = Column(DateTime, nullable=False)
-    claim_exp = Column(DateTime, nullable=False)
-    expires_at = Column(DateTime, nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    claim_iat = Column(DateTime(timezone=True), nullable=False)
+    claim_exp = Column(DateTime(timezone=True), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at = Column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )
 
     user = relationship("User", back_populates="refresh_session")
+
+
+class AuthActionToken(Base):
+    __tablename__ = "auth_action_tokens"
+    __table_args__ = (
+        Index("uq_auth_action_tokens_token_hash", "token_hash", unique=True),
+        Index("ix_auth_action_tokens_user_action_expires", "user_id", "action", "expires_at"),
+        Index("ix_auth_action_tokens_action_expires", "action", "expires_at"),
+        Index("ix_auth_action_tokens_used_at", "used_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    action = Column(String, nullable=False, index=True)
+    token_hash = Column(String, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    requested_ip = Column(String, nullable=True)
+    meta = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    user = relationship("User", back_populates="auth_action_tokens")
+

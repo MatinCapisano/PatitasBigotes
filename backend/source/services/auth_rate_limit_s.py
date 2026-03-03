@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 from sqlalchemy.orm import Session
 
@@ -111,3 +111,4 @@ def clear_login_failures(email: str, ip: str, db: Session) -> None:
     for row in (email_row, ip_row):
         if row is not None:
             _clear_row(row=row, now=now)
+

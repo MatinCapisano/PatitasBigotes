@@ -10,7 +10,8 @@ class UpdateDiscountRequest(BaseModel):
     type: Literal["percent", "fixed"] | None = None
     value: int | None = Field(default=None, gt=0)
     scope: Literal["all", "category", "product", "product_list"] | None = None
-    scope_value: str | None = None
+    category_id: int | None = None
+    product_id: int | None = None
     is_active: bool | None = None
     starts_at: datetime | None = None
     ends_at: datetime | None = None
@@ -23,7 +24,8 @@ class CreateDiscountRequest(BaseModel):
     type: Literal["percent", "fixed"]
     value: int = Field(gt=0)
     scope: Literal["all", "category", "product", "product_list"]
-    scope_value: str | None = None
+    category_id: int | None = None
+    product_id: int | None = None
     is_active: bool = True
     starts_at: datetime | None = None
     ends_at: datetime | None = None

@@ -8,6 +8,7 @@ from auth.security import (
     create_access_token,
     create_refresh_token,
     decode_refresh_token,
+    hash_password,
     hash_refresh_token,
     obtener_config_jwt,
     parsear_sub_a_user_id,
@@ -73,6 +74,8 @@ def authenticate_user(*, email: str, password: str, db: Session) -> User:
         raise LookupError("user not found")
     if not bool(user.has_account):
         raise ValueError("user does not have an account yet")
+    if user.email_verified_at is None:
+        raise ValueError("email not verified")
     if not verify_password(password, user.password_hash):
         raise ValueError("invalid credentials")
     return user
@@ -173,3 +176,34 @@ def logout_with_refresh_token(*, refresh_token: str, db: Session) -> None:
 
     bump_user_token_version(user_id=user_id, db=db)
     db.delete(session_row)
+
+
+def set_user_password_and_invalidate_sessions(
+    *,
+    user_id: int,
+    new_password: str,
+    db: Session,
+) -> User:
+    user = (
+        db.query(User)
+        .filter(User.id == int(user_id))
+        .with_for_update()
+        .first()
+    )
+    if user is None:
+        raise LookupError("user not found")
+
+    user.password_hash = hash_password(new_password)
+    user.has_account = True
+    user.token_version = int(user.token_version) + 1
+
+    refresh_session = (
+        db.query(UserRefreshSession)
+        .filter(UserRefreshSession.user_id == int(user_id))
+        .with_for_update()
+        .first()
+    )
+    if refresh_session is not None:
+        db.delete(refresh_session)
+    db.flush()
+    return user

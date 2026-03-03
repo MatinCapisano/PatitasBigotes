@@ -49,35 +49,49 @@ def _normalize_optional_text(value: str | None) -> str | None:
     return normalized or None
 
 
-def create_user(payload: CreateUserRequest, db: Session) -> dict:
-    user_data = payload.model_dump()
-    normalized_email = str(user_data["email"]).strip().lower()
+def create_auth_user(
+    *,
+    first_name: str,
+    last_name: str,
+    email: str,
+    password: str,
+    db: Session,
+) -> User:
+    normalized_email = str(email).strip().lower()
     if not normalized_email:
         raise HTTPException(status_code=400, detail="email is required")
 
     existing_user = db.query(User).filter(User.email == normalized_email).first()
     if existing_user is not None:
         raise HTTPException(status_code=409, detail="email already exists")
-    ensure_password_policy(user_data["password"])
+    ensure_password_policy(password)
 
     user = User(
-        first_name=_normalize_required_text(
-            user_data["first_name"],
-            field_name="first_name",
-        ),
-        last_name=_normalize_required_text(
-            user_data["last_name"],
-            field_name="last_name",
-        ),
+        first_name=_normalize_required_text(first_name, field_name="first_name"),
+        last_name=_normalize_required_text(last_name, field_name="last_name"),
         email=normalized_email,
         phone=None,
-        password_hash=hash_password(user_data["password"]),
+        password_hash=hash_password(password),
         has_account=True,
         is_admin=False,
+        email_verified_at=None,
+        email_verification_sent_at=None,
     )
     db.add(user)
     db.flush()
     db.refresh(user)
+    return user
+
+
+def create_user(payload: CreateUserRequest, db: Session) -> dict:
+    user_data = payload.model_dump()
+    user = create_auth_user(
+        first_name=user_data["first_name"],
+        last_name=user_data["last_name"],
+        email=user_data["email"],
+        password=user_data["password"],
+        db=db,
+    )
     return _serialize_user_created(user)
 
 

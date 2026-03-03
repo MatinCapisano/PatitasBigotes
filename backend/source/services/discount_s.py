@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from decimal import Decimal
 from typing import Iterable, TypedDict
 
@@ -20,7 +20,8 @@ class DiscountDTO(TypedDict):
     type: str
     value: int
     scope: str
-    scope_value: str | int | None
+    category_id: int | None
+    product_id: int | None
     is_active: bool
     starts_at: datetime | None
     ends_at: datetime | None
@@ -67,7 +68,8 @@ def _discount_to_dict(discount: Discount) -> DiscountDTO:
         "type": discount.type,
         "value": int(discount.value),
         "scope": discount.scope,
-        "scope_value": discount.scope_value,
+        "category_id": None if discount.category_id is None else int(discount.category_id),
+        "product_id": None if discount.product_id is None else int(discount.product_id),
         "is_active": bool(discount.is_active),
         "starts_at": discount.starts_at,
         "ends_at": discount.ends_at,
@@ -125,7 +127,8 @@ def create_discount(payload: dict, db: Session) -> DiscountDTO:
         type=payload["type"],
         value=normalized_value,
         scope=payload["scope"],
-        scope_value=payload.get("scope_value"),
+        category_id=payload.get("category_id"),
+        product_id=payload.get("product_id"),
         is_active=bool(payload.get("is_active", True)),
         starts_at=_coerce_datetime(payload.get("starts_at")),
         ends_at=_coerce_datetime(payload.get("ends_at")),
@@ -165,7 +168,8 @@ def update_discount(discount_id: int, updates: dict, db: Session) -> DiscountDTO
     discount.type = merged["type"]
     discount.value = normalized_value
     discount.scope = merged["scope"]
-    discount.scope_value = merged.get("scope_value")
+    discount.category_id = merged.get("category_id")
+    discount.product_id = merged.get("product_id")
     discount.is_active = bool(merged.get("is_active", True))
     discount.starts_at = _coerce_datetime(merged.get("starts_at"))
     discount.ends_at = _coerce_datetime(merged.get("ends_at"))
@@ -203,7 +207,8 @@ def _validate_discount_payload(payload: dict, *, db: Session) -> None:
     discount_type = payload.get("type")
     scope = payload.get("scope")
     value = payload.get("value")
-    scope_value = payload.get("scope_value")
+    category_id = payload.get("category_id")
+    product_id = payload.get("product_id")
     product_ids = payload.get("product_ids", [])
     starts_at = _coerce_datetime(payload.get("starts_at"))
     ends_at = _coerce_datetime(payload.get("ends_at"))
@@ -216,29 +221,36 @@ def _validate_discount_payload(payload: dict, *, db: Session) -> None:
     if starts_at is not None and ends_at is not None and starts_at > ends_at:
         raise ValueError("starts_at must be before or equal to ends_at")
 
-    if scope == "all" and scope_value is not None:
-        raise ValueError("scope_value must be null for all scope")
-    if scope in {"category", "product"} and scope_value is None:
-        raise ValueError("scope_value is required for category/product scope")
-    if scope == "category" and scope_value is not None:
+    if scope == "all":
+        if category_id is not None or product_id is not None:
+            raise ValueError("category_id and product_id must be null for all scope")
+    if scope == "category":
+        if category_id is None:
+            raise ValueError("category_id is required for category scope")
+        if product_id is not None:
+            raise ValueError("product_id must be null for category scope")
         exists = (
             db.query(Category.id)
-            .filter(Category.id == int(scope_value))
+            .filter(Category.id == int(category_id))
             .first()
         )
         if exists is None:
-            raise ValueError("category in scope_value does not exist")
-    if scope == "product" and scope_value is not None:
+            raise ValueError("category_id does not exist")
+    if scope == "product":
+        if product_id is None:
+            raise ValueError("product_id is required for product scope")
+        if category_id is not None:
+            raise ValueError("category_id must be null for product scope")
         exists = (
             db.query(Product.id)
-            .filter(Product.id == int(scope_value))
+            .filter(Product.id == int(product_id))
             .first()
         )
         if exists is None:
-            raise ValueError("product in scope_value does not exist")
+            raise ValueError("product_id does not exist")
     if scope == "product_list":
-        if scope_value is not None:
-            raise ValueError("scope_value must be null for product_list scope")
+        if category_id is not None or product_id is not None:
+            raise ValueError("category_id and product_id must be null for product_list scope")
         if not product_ids:
             raise ValueError("product_ids is required for product_list scope")
 
@@ -340,13 +352,12 @@ def get_applicable_discounts_for_product(product: dict, discounts: Iterable[Disc
             continue
 
         scope = discount.get("scope")
-        scope_value = discount.get("scope_value")
 
         if scope == "all":
             applicable.append(discount)
-        elif scope == "category" and str(scope_value) == str(category_id):
+        elif scope == "category" and int(discount.get("category_id") or 0) == int(category_id):
             applicable.append(discount)
-        elif scope == "product" and str(scope_value) == str(product_id):
+        elif scope == "product" and int(discount.get("product_id") or 0) == int(product_id):
             applicable.append(discount)
         elif scope == "product_list":
             product_ids = discount.get("product_ids", [])
@@ -420,7 +431,7 @@ def recalculate_order_totals(order: dict) -> dict:
 
 def freeze_order_pricing(order: dict) -> dict:
     order["pricing_frozen"] = True
-    order["pricing_frozen_at"] = datetime.utcnow().isoformat() + "Z"
+    order["pricing_frozen_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     return order
 
 
@@ -429,3 +440,5 @@ def validate_order_pricing_before_submit(order: dict) -> None:
         raise ValueError("cannot submit an empty order")
     if int(order.get("total_amount", 0)) < 0:
         raise ValueError("order total cannot be negative")
+
+

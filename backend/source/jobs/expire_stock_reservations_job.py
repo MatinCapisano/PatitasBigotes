@@ -1,7 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from datetime import UTC, datetime
 import logging
 import os
 import time
@@ -25,7 +25,7 @@ def _interval_minutes() -> int:
 def run_once() -> int:
     db = SessionLocal()
     try:
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         expired = expire_active_reservations(now=now, db=db)
         db.commit()
         logger.info("event=expire_stock_reservations_run expired_count=%s", int(expired))
@@ -75,3 +75,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+

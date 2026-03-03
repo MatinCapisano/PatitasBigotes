@@ -83,3 +83,42 @@ def get_mercadopago_webhook_max_age_seconds() -> int:
     if max_age <= 0:
         raise RuntimeError("MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS must be greater than 0")
     return max_age
+
+
+def get_app_base_url() -> str:
+    return os.getenv("APP_BASE_URL", "http://localhost:5173").strip().rstrip("/")
+
+
+def get_smtp_host() -> str:
+    host = os.getenv("SMTP_HOST", "").strip()
+    if host:
+        return host
+    raise RuntimeError("SMTP_HOST is required")
+
+
+def get_smtp_port() -> int:
+    raw_value = os.getenv("SMTP_PORT", "587").strip()
+    port = int(raw_value)
+    if port <= 0:
+        raise RuntimeError("SMTP_PORT must be greater than 0")
+    return port
+
+
+def get_smtp_username() -> str:
+    return os.getenv("SMTP_USERNAME", "").strip()
+
+
+def get_smtp_password() -> str:
+    return os.getenv("SMTP_PASSWORD", "").strip()
+
+
+def get_smtp_use_tls() -> bool:
+    raw_value = os.getenv("SMTP_USE_TLS", "true").strip().lower()
+    return raw_value in {"1", "true", "yes", "on"}
+
+
+def get_mail_from() -> str:
+    value = os.getenv("MAIL_FROM", "").strip()
+    if value:
+        return value
+    raise RuntimeError("MAIL_FROM is required")

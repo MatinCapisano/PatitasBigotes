@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+﻿from datetime import datetime, timedelta, UTC
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
 from sqlalchemy.orm import Session
@@ -63,7 +63,7 @@ def create_guest_checkout_order(
     record_created = False
     claimed_record = None
     try:
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         prune_expired_records(now=now, db=db)
 
         normalized_key = normalize_idempotency_key(idempotency_key)
@@ -344,3 +344,4 @@ def list_order_reservations(
         raise_http_error_from_exception(exc, db=db)
 
     return {"data": reservations}
+

@@ -1,8 +1,8 @@
-import os
+﻿import os
 import sys
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from unittest.mock import patch
 
@@ -239,8 +239,8 @@ class GuestCheckoutIdempotencyTests(unittest.TestCase):
                     request_hash="h",
                     response_payload='{"ok":true}',
                     status="completed",
-                    created_at=datetime.utcnow() - timedelta(days=2),
-                    expires_at=datetime.utcnow() - timedelta(days=1),
+                    created_at=datetime.now(UTC) - timedelta(days=2),
+                    expires_at=datetime.now(UTC) - timedelta(days=1),
                 )
             )
             db.add(
@@ -250,13 +250,13 @@ class GuestCheckoutIdempotencyTests(unittest.TestCase):
                     request_hash="h2",
                     response_payload='{"ok":true}',
                     status="completed",
-                    created_at=datetime.utcnow(),
-                    expires_at=datetime.utcnow() + timedelta(hours=6),
+                    created_at=datetime.now(UTC),
+                    expires_at=datetime.now(UTC) + timedelta(hours=6),
                 )
             )
             db.commit()
 
-            deleted = prune_expired_records(now=datetime.utcnow(), db=db, limit=200)
+            deleted = prune_expired_records(now=datetime.now(UTC), db=db, limit=200)
             self.assertEqual(deleted, 1)
 
             remaining = (
@@ -272,3 +272,4 @@ class GuestCheckoutIdempotencyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 import hashlib
 import json
 import uuid
@@ -110,7 +110,7 @@ def acquire_webhook_event(
     if normalized_key is None:
         raise ValueError("event_key is required")
 
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     event = WebhookEvent(
         provider=normalized_provider,
         event_key=normalized_key,
@@ -170,7 +170,7 @@ def mark_webhook_event_processed(
     if event is None:
         return
     event.status = "processed"
-    event.processed_at = datetime.utcnow()
+    event.processed_at = datetime.now(UTC)
     event.last_error = None
     event.next_retry_at = None
     event.dead_letter_at = None
@@ -201,7 +201,7 @@ def mark_webhook_event_failed(
     )
     if event is None:
         return
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     event.attempt_count = int(event.attempt_count or 0) + 1
     event.processed_at = now
     event.last_error = (error_message or "webhook processing failed")[:2000]
@@ -635,7 +635,7 @@ def apply_mercadopago_normalized_state(
     if normalized_currency is not None:
         normalized_currency = normalized_currency.upper()
 
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     payment = (
         db.query(Payment)
         .filter(Payment.id == payment_id, Payment.method == "mercadopago")
@@ -718,7 +718,7 @@ def create_payment_for_order(
 ) -> dict:
     expire_active_reservations_for_order(
         order_id=order_id,
-        now=datetime.utcnow(),
+        now=datetime.now(UTC),
         db=db,
     )
 
@@ -775,7 +775,7 @@ def create_payment_for_order(
     if amount <= 0:
         raise ValueError("order total must be greater than 0")
 
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     active_pending_payment = _find_active_pending_payment(
         db,
         order_id=order.id,
@@ -930,7 +930,7 @@ def confirm_manual_payment_for_order(
 ) -> dict:
     expire_active_reservations_for_order(
         order_id=order_id,
-        now=datetime.utcnow(),
+        now=datetime.now(UTC),
         db=db,
     )
 
@@ -985,7 +985,7 @@ def confirm_manual_payment_for_order(
 
     consume_reservations_for_paid_order(order_id=order.id, db=db)
 
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     payment = existing_paid_by_ref
     if payment is None:
         payment = Payment(
@@ -1067,3 +1067,4 @@ def get_payment_for_user(
         raise LookupError("payment not found")
 
     return _payment_to_dict(payment)
+

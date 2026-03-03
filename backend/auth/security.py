@@ -13,7 +13,7 @@ DEFAULT_REFRESH_TOKEN_EXPIRE_DAYS = 30
 DEFAULT_JWT_ISSUER = "patitasbigotes-api"
 
 pwd_context = CryptContext(
-    schemes=["bcrypt"],
+    schemes=["pbkdf2_sha256"],
     deprecated="auto",
 )
 

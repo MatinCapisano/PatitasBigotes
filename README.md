@@ -8,6 +8,8 @@
 4. For Mercado Pago integration, set `MERCADOPAGO_ACCESS_TOKEN` and keep `MERCADOPAGO_ENV=sandbox` for test mode.
 5. JWT defaults for auth are `ACCESS_TOKEN_EXPIRE_MINUTES=120` and `REFRESH_TOKEN_EXPIRE_DAYS=30`.
 6. Set `JWT_ISSUER` consistently between token creation and validation.
+7. For auth emails, configure SMTP (`SMTP_*`) and `MAIL_FROM`.
+8. Set `APP_BASE_URL` so verification/reset links point to your frontend.
 
 ## Initialize database tables
 
@@ -16,6 +18,29 @@ Run from `backend/`:
 ```bash
 python -m source.db.init_db
 ```
+
+## Auth email verification + password reset migration
+
+For existing databases, apply:
+
+```sql
+\i backend/scripts/sql/2026_03_03_auth_email_verification_and_reset.sql
+```
+
+New auth endpoints:
+
+1. `POST /auth/register`
+2. `POST /auth/email/verify/request`
+3. `POST /auth/email/verify/confirm`
+4. `POST /auth/password/reset/request`
+5. `POST /auth/password/reset/confirm`
+6. `POST /auth/password/change`
+
+Behavior:
+
+1. Login is blocked until email verification is completed.
+2. Verification/reset tokens are one-time and persisted as hashes in DB.
+3. Password reset/change bumps `token_version` and invalidates refresh session.
 
 ## Guest checkout idempotency
 
@@ -176,6 +201,20 @@ WEBHOOK_REPROCESS_BATCH_SIZE=100
 WEBHOOK_REPROCESS_MAX_ATTEMPTS=5
 WEBHOOK_REPROCESS_BASE_DELAY_MINUTES=20
 WEBHOOK_REPROCESS_MAX_DELAY_MINUTES=360
+```
+
+## Auth action tokens prune job
+
+Run once:
+
+```bash
+python -m source.jobs.prune_auth_action_tokens_job --once
+```
+
+Run periodically (default daily):
+
+```bash
+python -m source.jobs.prune_auth_action_tokens_job
 ```
 
 ## Stock reservations migration (orders submitted)

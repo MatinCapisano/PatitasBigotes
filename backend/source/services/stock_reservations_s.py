@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -201,7 +201,7 @@ def _expire_active_reservations_internal(
 
 
 def reserve_stock_for_submitted_order(order_id: int, db: Session) -> list[dict]:
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     expire_active_reservations_for_order(order_id=order_id, now=now, db=db)
     order, items = _lock_order_items_for_order(order_id=order_id, db=db)
     if order.status not in {"draft", "submitted"}:
@@ -263,7 +263,7 @@ def reserve_stock_for_submitted_order(order_id: int, db: Session) -> list[dict]:
 
 
 def consume_reservations_for_paid_order(order_id: int, db: Session) -> list[dict]:
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     expire_active_reservations_for_order(order_id=order_id, now=now, db=db)
     order, _ = _lock_order_items_for_order(order_id=order_id, db=db)
     if order.status not in {"submitted", "paid"}:
@@ -322,7 +322,7 @@ def release_reservations_for_cancelled_order(
     reason: str,
     db: Session,
 ) -> int:
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     expire_active_reservations_for_order(order_id=order_id, now=now, db=db)
     _, _ = _lock_order_items_for_order(order_id=order_id, db=db)
     active_reservations = (
@@ -344,7 +344,7 @@ def release_reservations_for_cancelled_order(
 
 
 def list_active_reservations_for_order(order_id: int, db: Session) -> list[dict]:
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     expire_active_reservations_for_order(order_id=order_id, now=now, db=db)
     rows = (
         db.query(StockReservation)
@@ -359,7 +359,7 @@ def list_active_reservations_for_order(order_id: int, db: Session) -> list[dict]
 
 
 def list_reservations_for_order(order_id: int, db: Session) -> list[dict]:
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     expire_active_reservations_for_order(order_id=order_id, now=now, db=db)
     rows = (
         db.query(StockReservation)
@@ -368,3 +368,4 @@ def list_reservations_for_order(order_id: int, db: Session) -> list[dict]:
         .all()
     )
     return [_reservation_to_dict(row) for row in rows]
+

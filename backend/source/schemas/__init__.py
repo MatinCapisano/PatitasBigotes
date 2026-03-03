@@ -1,4 +1,11 @@
-from source.schemas.auth_s import LoginRequest
+from source.schemas.auth_s import (
+    EmailRequest,
+    LoginRequest,
+    PasswordChangeRequest,
+    PasswordResetConfirmRequest,
+    RegisterRequest,
+    TokenRequest,
+)
 from source.schemas.discounts_s import CreateDiscountRequest, UpdateDiscountRequest
 from source.schemas.orders_s import (
     AddOrderItemRequest,
@@ -39,6 +46,11 @@ __all__ = [
     "CreateGuestUserRequest",
     "ResolveUserRequest",
     "LoginRequest",
+    "RegisterRequest",
+    "EmailRequest",
+    "TokenRequest",
+    "PasswordResetConfirmRequest",
+    "PasswordChangeRequest",
     "UpdateDiscountRequest",
     "CreateDiscountRequest",
     "PayOrderRequest",

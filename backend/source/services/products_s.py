@@ -425,7 +425,8 @@ def list_storefront_products(
         elif sort_by == "name":
             column = Product.name
         else:
-            # Product currently has no created_at; id is used as insertion-order proxy.
+            # `products` has no real created_at yet; for storefront `sort_by=created_at`
+            # we temporarily sort by `id` as a creation-order proxy.
             column = Product.id
 
         query = query.order_by(desc(column) if sort_order == "desc" else asc(column))

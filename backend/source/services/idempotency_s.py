@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 import hashlib
 import json
 
@@ -76,8 +76,8 @@ def save_completed_record(
             default=_json_default,
         ),
         status="completed",
-        created_at=datetime.utcnow(),
-        expires_at=expires_at or (datetime.utcnow() + timedelta(hours=IDEMPOTENCY_TTL_HOURS)),
+        created_at=datetime.now(UTC),
+        expires_at=expires_at or (datetime.now(UTC) + timedelta(hours=IDEMPOTENCY_TTL_HOURS)),
     )
     db.add(record)
     db.flush()
@@ -98,8 +98,8 @@ def acquire_record(
         request_hash=request_hash,
         response_payload="{}",
         status="processing",
-        created_at=datetime.utcnow(),
-        expires_at=expires_at or (datetime.utcnow() + timedelta(hours=IDEMPOTENCY_TTL_HOURS)),
+        created_at=datetime.now(UTC),
+        expires_at=expires_at or (datetime.now(UTC) + timedelta(hours=IDEMPOTENCY_TTL_HOURS)),
     )
     try:
         with db.begin_nested():
@@ -166,3 +166,4 @@ def prune_expired_records(
     )
     db.flush()
     return int(deleted or 0)
+

@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +21,14 @@ SIGNUP_SCOPE_EMAIL_INTERVAL = "public_signup_email_interval"
 CHECKOUT_SCOPE_IP = "public_checkout_ip"
 CHECKOUT_SCOPE_EMAIL_WINDOW = "public_checkout_email_window"
 CHECKOUT_SCOPE_EMAIL_INTERVAL = "public_checkout_email_interval"
+
+PASSWORD_RESET_SCOPE_IP = "password_reset_request_ip"
+PASSWORD_RESET_SCOPE_EMAIL_WINDOW = "password_reset_request_email_window"
+PASSWORD_RESET_SCOPE_EMAIL_INTERVAL = "password_reset_request_email_interval"
+
+VERIFY_RESEND_SCOPE_IP = "email_verify_resend_ip"
+VERIFY_RESEND_SCOPE_EMAIL_WINDOW = "email_verify_resend_email_window"
+VERIFY_RESEND_SCOPE_EMAIL_INTERVAL = "email_verify_resend_email_interval"
 
 
 def _utc_now() -> datetime:
@@ -176,6 +184,44 @@ def enforce_public_signup_limits(
     )
 
 
+def enforce_password_reset_request_limits(
+    *,
+    client_ip: str,
+    email: str,
+    db: Session,
+) -> None:
+    _enforce_public_email_ip_limits(
+        client_ip=client_ip,
+        email=email,
+        ip_scope=PASSWORD_RESET_SCOPE_IP,
+        email_window_scope=PASSWORD_RESET_SCOPE_EMAIL_WINDOW,
+        email_interval_scope=PASSWORD_RESET_SCOPE_EMAIL_INTERVAL,
+        ip_detail="too many password reset attempts from this ip",
+        email_detail="too many password reset attempts for this email",
+        interval_detail="please wait before retrying password reset",
+        db=db,
+    )
+
+
+def enforce_email_verify_resend_limits(
+    *,
+    client_ip: str,
+    email: str,
+    db: Session,
+) -> None:
+    _enforce_public_email_ip_limits(
+        client_ip=client_ip,
+        email=email,
+        ip_scope=VERIFY_RESEND_SCOPE_IP,
+        email_window_scope=VERIFY_RESEND_SCOPE_EMAIL_WINDOW,
+        email_interval_scope=VERIFY_RESEND_SCOPE_EMAIL_INTERVAL,
+        ip_detail="too many verification attempts from this ip",
+        email_detail="too many verification attempts for this email",
+        interval_detail="please wait before retrying verification",
+        db=db,
+    )
+
+
 def _enforce_public_email_ip_limits(
     *,
     client_ip: str,
@@ -233,3 +279,4 @@ def _enforce_public_email_ip_limits(
         skip_if_new=email_interval_created,
     )
     db.flush()
+

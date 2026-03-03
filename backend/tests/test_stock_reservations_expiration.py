@@ -1,6 +1,6 @@
-import sys
+﻿import sys
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -22,6 +22,12 @@ from source.db.models import (
     User,
 )
 from source.services.stock_reservations_s import expire_active_reservations
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 class StockReservationExpirationTests(unittest.TestCase):
@@ -56,12 +62,12 @@ class StockReservationExpirationTests(unittest.TestCase):
             user = User(
                 first_name="John",
                 last_name="Doe",
-                email=f"john-{datetime.utcnow().timestamp()}@example.com",
+                email=f"john-{datetime.now(UTC).timestamp()}@example.com",
                 password_hash="!",
                 has_account=False,
                 is_admin=False,
             )
-            category = Category(name=f"cat-{datetime.utcnow().timestamp()}")
+            category = Category(name=f"cat-{datetime.now(UTC).timestamp()}")
             session.add_all([user, category])
             session.flush()
 
@@ -75,7 +81,7 @@ class StockReservationExpirationTests(unittest.TestCase):
 
             variant = ProductVariant(
                 product_id=product.id,
-                sku=f"SKU-{datetime.utcnow().timestamp()}",
+                sku=f"SKU-{datetime.now(UTC).timestamp()}",
                 size="M",
                 color="Blue",
                 price=10000,
@@ -117,7 +123,7 @@ class StockReservationExpirationTests(unittest.TestCase):
                 variant_id=variant.id,
                 quantity=item_qty,
                 status="active",
-                expires_at=datetime.utcnow() - timedelta(minutes=1),
+                expires_at=datetime.now(UTC) - timedelta(minutes=1),
                 reason=None,
             )
             session.add(reservation)
@@ -130,12 +136,12 @@ class StockReservationExpirationTests(unittest.TestCase):
                         status="pending",
                         amount=int(order.total_amount),
                         currency="ARS",
-                        idempotency_key=f"pay-{datetime.utcnow().timestamp()}",
+                        idempotency_key=f"pay-{datetime.now(UTC).timestamp()}",
                         external_ref=None,
                         provider_status="pending",
                         provider_payload=None,
                         receipt_url=None,
-                        expires_at=datetime.utcnow() + timedelta(hours=1),
+                        expires_at=datetime.now(UTC) + timedelta(hours=1),
                         paid_at=None,
                     )
                 )
@@ -154,7 +160,7 @@ class StockReservationExpirationTests(unittest.TestCase):
 
         session = self.TestSession()
         try:
-            expired_count = expire_active_reservations(now=datetime.utcnow(), db=session)
+            expired_count = expire_active_reservations(now=datetime.now(UTC), db=session)
             session.commit()
         finally:
             session.close()
@@ -176,16 +182,17 @@ class StockReservationExpirationTests(unittest.TestCase):
         self.assertIsNotNone(reservation)
         assert order is not None
         assert reservation is not None
+        reservation_expires_at = _as_utc(reservation.expires_at)
         self.assertEqual(order.status, "submitted")
         self.assertEqual(reservation.status, "active")
         self.assertEqual(int(reservation.reactivation_count), 1)
         self.assertGreater(
-            reservation.expires_at,
-            datetime.utcnow() + timedelta(hours=11),
+            reservation_expires_at,
+            datetime.now(UTC) + timedelta(hours=11),
         )
         self.assertLess(
-            reservation.expires_at,
-            datetime.utcnow() + timedelta(hours=13),
+            reservation_expires_at,
+            datetime.now(UTC) + timedelta(hours=13),
         )
 
     def test_expire_cancels_submitted_order_and_pending_payments_when_stock_missing(self) -> None:
@@ -198,7 +205,7 @@ class StockReservationExpirationTests(unittest.TestCase):
 
         session = self.TestSession()
         try:
-            expired_count = expire_active_reservations(now=datetime.utcnow(), db=session)
+            expired_count = expire_active_reservations(now=datetime.now(UTC), db=session)
             session.commit()
         finally:
             session.close()
@@ -241,7 +248,7 @@ class StockReservationExpirationTests(unittest.TestCase):
 
         session = self.TestSession()
         try:
-            expired_count = expire_active_reservations(now=datetime.utcnow(), db=session)
+            expired_count = expire_active_reservations(now=datetime.now(UTC), db=session)
             session.commit()
         finally:
             session.close()
@@ -275,8 +282,8 @@ class StockReservationExpirationTests(unittest.TestCase):
 
         session = self.TestSession()
         try:
-            first = expire_active_reservations(now=datetime.utcnow(), db=session)
-            second = expire_active_reservations(now=datetime.utcnow(), db=session)
+            first = expire_active_reservations(now=datetime.now(UTC), db=session)
+            second = expire_active_reservations(now=datetime.now(UTC), db=session)
             session.commit()
         finally:
             session.close()
@@ -294,16 +301,16 @@ class StockReservationExpirationTests(unittest.TestCase):
 
         session = self.TestSession()
         try:
-            first = expire_active_reservations(now=datetime.utcnow(), db=session)
+            first = expire_active_reservations(now=datetime.now(UTC), db=session)
             reservation = (
                 session.query(StockReservation)
                 .filter(StockReservation.id == reservation_id)
                 .first()
             )
             assert reservation is not None
-            reservation.expires_at = datetime.utcnow() - timedelta(minutes=1)
+            reservation.expires_at = datetime.now(UTC) - timedelta(minutes=1)
             session.flush()
-            second = expire_active_reservations(now=datetime.utcnow(), db=session)
+            second = expire_active_reservations(now=datetime.now(UTC), db=session)
             session.commit()
         finally:
             session.close()
@@ -340,3 +347,4 @@ class StockReservationExpirationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

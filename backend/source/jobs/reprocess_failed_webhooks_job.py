@@ -1,7 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from datetime import UTC, datetime
 import json
 import logging
 import os
@@ -118,7 +118,7 @@ def run_once(
     max_delay_minutes: int,
 ) -> dict[str, int]:
     db = SessionLocal()
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     try:
         metrics_before = get_webhook_reprocess_metrics(provider=PROVIDER, now=now, db=db)
     except ProgrammingError as exc:
@@ -244,7 +244,7 @@ def run_once(
                 db.commit()
                 metrics["reprocessed"] += 1
 
-        after_now = datetime.utcnow()
+        after_now = datetime.now(UTC)
         metrics_after = get_webhook_reprocess_metrics(provider=PROVIDER, now=after_now, db=db)
         metrics["failed_due_after"] = int(metrics_after["failed_due"])
         metrics["failed_not_due_after"] = int(metrics_after["failed_not_due"])
@@ -409,3 +409,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+

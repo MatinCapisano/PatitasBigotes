@@ -1,6 +1,6 @@
-import sys
+﻿import sys
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -53,12 +53,12 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
             user = User(
                 first_name="Jane",
                 last_name="Doe",
-                email=f"jane-{datetime.utcnow().timestamp()}@example.com",
+                email=f"jane-{datetime.now(UTC).timestamp()}@example.com",
                 password_hash="!",
                 has_account=False,
                 is_admin=False,
             )
-            category = Category(name=f"cat-{datetime.utcnow().timestamp()}")
+            category = Category(name=f"cat-{datetime.now(UTC).timestamp()}")
             session.add_all([user, category])
             session.flush()
 
@@ -68,7 +68,7 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
 
             variant = ProductVariant(
                 product_id=product.id,
-                sku=f"SKU-{datetime.utcnow().timestamp()}",
+                sku=f"SKU-{datetime.now(UTC).timestamp()}",
                 size="M",
                 color="Blue",
                 price=10000,
@@ -111,7 +111,7 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
                     variant_id=variant.id,
                     quantity=1,
                     status="active",
-                    expires_at=datetime.utcnow() + timedelta(hours=1),
+                    expires_at=datetime.now(UTC) + timedelta(hours=1),
                 )
             )
             session.commit()
@@ -128,7 +128,7 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
                 method="bank_transfer",
                 db=session,
                 user_id=user_id,
-                idempotency_key=f"idemp-{datetime.utcnow().timestamp()}",
+                idempotency_key=f"idemp-{datetime.now(UTC).timestamp()}",
                 currency="ARS",
             )
             session.commit()
@@ -146,7 +146,7 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
                     method="bank_transfer",
                     db=session,
                     user_id=user_id,
-                    idempotency_key=f"idemp-usd-{datetime.utcnow().timestamp()}",
+                    idempotency_key=f"idemp-usd-{datetime.now(UTC).timestamp()}",
                     currency="USD",
                 )
             self.assertEqual(str(ctx.exception), "only ARS currency is supported")
@@ -163,12 +163,12 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
                 status="pending",
                 amount=10000,
                 currency="ARS",
-                idempotency_key=f"idemp-mp-{datetime.utcnow().timestamp()}",
+                idempotency_key=f"idemp-mp-{datetime.now(UTC).timestamp()}",
                 external_ref=f"mp-order-{order_id}-pay-1",
                 provider_status="preference_created",
                 provider_payload=None,
                 receipt_url=None,
-                expires_at=datetime.utcnow() + timedelta(hours=1),
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
                 paid_at=None,
             )
             session.add(payment)
@@ -199,12 +199,12 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
                 status="pending",
                 amount=10000,
                 currency="ARS",
-                idempotency_key=f"idemp-mp-cancel-{datetime.utcnow().timestamp()}",
+                idempotency_key=f"idemp-mp-cancel-{datetime.now(UTC).timestamp()}",
                 external_ref=f"mp-order-{order_id}-pay-1",
                 provider_status="preference_created",
                 provider_payload=None,
                 receipt_url=None,
-                expires_at=datetime.utcnow() + timedelta(hours=1),
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
                 paid_at=None,
             )
             session.add(payment)
@@ -250,12 +250,12 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
                 status="cancelled",
                 amount=10000,
                 currency="ARS",
-                idempotency_key=f"idemp-bt-cancelled-{datetime.utcnow().timestamp()}",
+                idempotency_key=f"idemp-bt-cancelled-{datetime.now(UTC).timestamp()}",
                 external_ref=f"bt-order-{order_id}-pay-9",
                 provider_status="cancelled",
                 provider_payload=None,
                 receipt_url=None,
-                expires_at=datetime.utcnow() + timedelta(hours=1),
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
                 paid_at=None,
             )
             session.add(cancelled)
@@ -288,12 +288,12 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
                 status="pending",
                 amount=10000,
                 currency="ARS",
-                idempotency_key=f"idemp-bt-pending-{datetime.utcnow().timestamp()}",
+                idempotency_key=f"idemp-bt-pending-{datetime.now(UTC).timestamp()}",
                 external_ref=None,
                 provider_status="pending",
                 provider_payload=None,
                 receipt_url=None,
-                expires_at=datetime.utcnow() + timedelta(hours=1),
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
                 paid_at=None,
             )
             session.add(pending)
@@ -315,3 +315,4 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
