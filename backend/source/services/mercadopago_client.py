@@ -187,6 +187,59 @@ def get_payment_by_id(payment_id: str | int) -> dict:
     raise PaymentProviderUnavailableError("mercadopago payment lookup failed")
 
 
+def find_latest_payment_by_external_reference(external_reference: str) -> dict | None:
+    sdk = _get_sdk()
+    normalized_external_ref = str(external_reference).strip()
+    if not normalized_external_ref:
+        raise PaymentProviderValidationError("mercadopago external_reference is required")
+
+    request_payload = {
+        "external_reference": normalized_external_ref,
+        "sort": "date_created",
+        "criteria": "desc",
+        "limit": 1,
+    }
+    options = {"timeout": get_mercadopago_timeout_seconds()}
+    for attempt in range(1, MAX_RETRY_ATTEMPTS + 1):
+        try:
+            response = sdk.payment().search(request_payload, options)
+        except TimeoutError as exc:
+            if attempt == MAX_RETRY_ATTEMPTS:
+                raise PaymentProviderTimeoutError("mercadopago request timed out") from exc
+            time.sleep(RETRY_BASE_DELAY_SECONDS * attempt)
+            continue
+        except Exception as exc:
+            if attempt == MAX_RETRY_ATTEMPTS:
+                raise PaymentProviderUnavailableError("mercadopago request failed") from exc
+            time.sleep(RETRY_BASE_DELAY_SECONDS * attempt)
+            continue
+
+        status = int(response.get("status", 0))
+        data = response.get("response")
+        if status >= 500:
+            if attempt == MAX_RETRY_ATTEMPTS:
+                raise PaymentProviderUnavailableError("mercadopago unavailable")
+            time.sleep(RETRY_BASE_DELAY_SECONDS * attempt)
+            continue
+
+        _handle_response_status(status, operation="payment search")
+        if not isinstance(data, dict):
+            if attempt == MAX_RETRY_ATTEMPTS:
+                raise PaymentProviderUnavailableError("mercadopago invalid response payload")
+            time.sleep(RETRY_BASE_DELAY_SECONDS * attempt)
+            continue
+
+        results = data.get("results")
+        if not isinstance(results, list) or not results:
+            return None
+        first = results[0]
+        if not isinstance(first, dict):
+            return None
+        return first
+
+    raise PaymentProviderUnavailableError("mercadopago payment search failed")
+
+
 def process_mercadopago_event_payload(
     *,
     payload: dict,

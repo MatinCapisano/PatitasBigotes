@@ -286,6 +286,7 @@ class Payment(Base):
 
     idempotency_key = Column(String, nullable=False, unique=True, index=True)
     external_ref = Column(String, nullable=True, index=True)
+    preference_id = Column(String, nullable=True, index=True)
     provider_status = Column(String, nullable=True)
     provider_payload = Column(String, nullable=True)
     receipt_url = Column(String, nullable=True)

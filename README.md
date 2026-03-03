@@ -181,7 +181,7 @@ Run once:
 python -m source.jobs.reprocess_failed_webhooks_job --once
 ```
 
-Run periodically (default every 60 minutes, batch 25):
+Run periodically (default every 30 minutes, batch 25):
 
 ```bash
 python -m source.jobs.reprocess_failed_webhooks_job
@@ -189,7 +189,7 @@ python -m source.jobs.reprocess_failed_webhooks_job
 
 Dead-letter + retry policy defaults (small store profile):
 
-1. `WEBHOOK_REPROCESS_INTERVAL_MINUTES=60`
+1. `WEBHOOK_REPROCESS_INTERVAL_MINUTES=30`
 2. `WEBHOOK_REPROCESS_BATCH_SIZE=25`
 3. `WEBHOOK_REPROCESS_MAX_ATTEMPTS=4`
 4. `WEBHOOK_REPROCESS_BASE_DELAY_MINUTES=30`
@@ -198,17 +198,49 @@ Dead-letter + retry policy defaults (small store profile):
 Override runtime values:
 
 ```bash
-python -m source.jobs.reprocess_failed_webhooks_job --interval-minutes 120 --batch-size 100 --max-attempts 5 --base-delay-minutes 20 --max-delay-minutes 360
+python -m source.jobs.reprocess_failed_webhooks_job --interval-minutes 30 --batch-size 100 --max-attempts 5 --base-delay-minutes 20 --max-delay-minutes 360
 ```
 
 Or via env vars:
 
 ```bash
-WEBHOOK_REPROCESS_INTERVAL_MINUTES=120
+WEBHOOK_REPROCESS_INTERVAL_MINUTES=30
 WEBHOOK_REPROCESS_BATCH_SIZE=100
 WEBHOOK_REPROCESS_MAX_ATTEMPTS=5
 WEBHOOK_REPROCESS_BASE_DELAY_MINUTES=20
 WEBHOOK_REPROCESS_MAX_DELAY_MINUTES=360
+```
+
+## Pending payments reconciliation job
+
+Reconciles pending Mercadopago payments in batch using `external_ref`.
+Useful when webhooks are delayed/lost and internal state is still `pending`.
+
+Run once:
+
+```bash
+python -m source.jobs.reconcile_pending_payments_job --once
+```
+
+Run periodically (default every 180 minutes, batch 50, max age 24h, min age 15m):
+
+```bash
+python -m source.jobs.reconcile_pending_payments_job
+```
+
+Override runtime values:
+
+```bash
+python -m source.jobs.reconcile_pending_payments_job --interval-minutes 180 --batch-size 100 --max-age-hours 24 --min-age-minutes 15
+```
+
+Or via env vars:
+
+```bash
+PAYMENTS_RECONCILE_INTERVAL_MINUTES=180
+PAYMENTS_RECONCILE_BATCH_SIZE=100
+PAYMENTS_RECONCILE_MAX_AGE_HOURS=24
+PAYMENTS_RECONCILE_MIN_AGE_MINUTES=15
 ```
 
 ## Auth action tokens prune job

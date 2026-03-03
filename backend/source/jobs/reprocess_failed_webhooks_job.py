@@ -22,7 +22,7 @@ from source.services.payment_s import (
     mark_webhook_event_processed,
 )
 
-DEFAULT_INTERVAL_MINUTES = 60
+DEFAULT_INTERVAL_MINUTES = 30
 DEFAULT_BATCH_SIZE = 25
 DEFAULT_MAX_ATTEMPTS = 4
 DEFAULT_BASE_DELAY_MINUTES = 30
@@ -329,7 +329,7 @@ def main() -> None:
         default=None,
         help=(
             "Run interval in minutes "
-            "(defaults to WEBHOOK_REPROCESS_INTERVAL_MINUTES or 60)"
+            "(defaults to WEBHOOK_REPROCESS_INTERVAL_MINUTES or 30)"
         ),
     )
     parser.add_argument(

@@ -59,6 +59,7 @@ def _payment_to_dict(payment: Payment) -> dict:
         "currency": payment.currency,
         "idempotency_key": payment.idempotency_key,
         "external_ref": payment.external_ref,
+        "preference_id": payment.preference_id,
         "provider_status": payment.provider_status,
         "provider_payload": payment.provider_payload,
         "receipt_url": payment.receipt_url,
@@ -439,11 +440,6 @@ def _assert_valid_payment_transition(current_status: str, next_status: str) -> N
         raise ValueError("invalid payment status transition")
 
 
-def _payment_has_preference_id(payment: Payment, preference_id: str) -> bool:
-    payload = _deserialize_provider_payload(payment.provider_payload)
-    return _get_checkout_preference_id(payload) == preference_id
-
-
 def _find_active_pending_payment(
     session: Session,
     *,
@@ -579,18 +575,17 @@ def find_payment_for_mercadopago_event(
         raise ValueError("preference_id or external_ref is required")
 
     if normalized_preference_id is not None:
-        candidates = (
+        payment = (
             db.query(Payment)
             .filter(
                 Payment.method == "mercadopago",
-                Payment.provider_payload.isnot(None),
+                Payment.preference_id == normalized_preference_id,
             )
             .order_by(Payment.created_at.desc(), Payment.id.desc())
-            .all()
+            .first()
         )
-        for candidate in candidates:
-            if _payment_has_preference_id(candidate, normalized_preference_id):
-                return _payment_to_dict(candidate)
+        if payment is not None:
+            return _payment_to_dict(payment)
 
     if normalized_external_ref is not None:
         payment = (
@@ -857,8 +852,11 @@ def create_payment_for_order(
             checkout_external_ref = _get_checkout_external_ref(
                 existing_provider_payload
             )
+            checkout_preference_id = _get_checkout_preference_id(existing_provider_payload)
             if checkout_external_ref is not None and payment.external_ref is None:
                 payment.external_ref = checkout_external_ref
+            if checkout_preference_id is not None and payment.preference_id is None:
+                payment.preference_id = checkout_preference_id
             payment.provider_status = payment.provider_status or "preference_created"
         else:
             external_ref, provider_payload = _build_mercadopago_payload(
@@ -870,6 +868,7 @@ def create_payment_for_order(
                 payment_idempotency_key=normalized_key,
             )
             payment.external_ref = external_ref
+            payment.preference_id = _get_checkout_preference_id(provider_payload)
             payment.provider_status = "preference_created"
             payment.provider_payload = _serialize_provider_payload(provider_payload)
 
@@ -912,6 +911,36 @@ def create_retry_payment_for_order(
         idempotency_key=retry_key,
         currency=currency,
         expires_in_minutes=expires_in_minutes,
+    )
+
+
+def list_reconcilable_pending_mercadopago_payments(
+    *,
+    db: Session,
+    now: datetime,
+    limit: int,
+    max_age_hours: int,
+    min_age_minutes: int,
+) -> list[Payment]:
+    safe_limit = max(1, int(limit))
+    safe_max_age_hours = max(1, int(max_age_hours))
+    safe_min_age_minutes = max(0, int(min_age_minutes))
+    oldest_created_at = now - timedelta(hours=safe_max_age_hours)
+    newest_created_at = now - timedelta(minutes=safe_min_age_minutes)
+    return (
+        db.query(Payment)
+        .join(Order, Payment.order_id == Order.id)
+        .filter(
+            Payment.method == "mercadopago",
+            Payment.status == "pending",
+            Payment.external_ref.is_not(None),
+            Payment.created_at >= oldest_created_at,
+            Payment.created_at <= newest_created_at,
+            Order.status.in_(["submitted", "paid"]),
+        )
+        .order_by(Payment.created_at.asc(), Payment.id.asc())
+        .limit(safe_limit)
+        .all()
     )
 
 

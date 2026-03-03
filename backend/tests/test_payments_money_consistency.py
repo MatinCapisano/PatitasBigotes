@@ -25,6 +25,7 @@ from source.services.payment_s import (
     apply_mercadopago_normalized_state,
     create_payment_for_order,
     create_retry_payment_for_order,
+    find_payment_for_mercadopago_event,
 )
 
 
@@ -309,6 +310,39 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
                     expires_in_minutes=60,
                 )
             self.assertEqual(str(ctx.exception), "latest payment attempt is not retryable")
+        finally:
+            session.close()
+
+    def test_find_payment_by_preference_id_uses_dedicated_column(self) -> None:
+        order_id, _ = self._seed_submitted_order_with_reservation()
+        session = self.TestSession()
+        try:
+            payment = Payment(
+                order_id=order_id,
+                method="mercadopago",
+                status="pending",
+                amount=10000,
+                currency="ARS",
+                idempotency_key=f"idemp-pref-{datetime.now(UTC).timestamp()}",
+                external_ref=f"mp-order-{order_id}-pay-pref",
+                preference_id=f"pref-{order_id}",
+                provider_status="preference_created",
+                provider_payload=None,
+                receipt_url=None,
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+                paid_at=None,
+            )
+            session.add(payment)
+            session.commit()
+
+            found = find_payment_for_mercadopago_event(
+                preference_id=f"pref-{order_id}",
+                external_ref=None,
+                db=session,
+            )
+            self.assertIsNotNone(found)
+            assert found is not None
+            self.assertEqual(found["id"], int(payment.id))
         finally:
             session.close()
 
