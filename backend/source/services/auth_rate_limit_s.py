@@ -112,3 +112,36 @@ def clear_login_failures(email: str, ip: str, db: Session) -> None:
         if row is not None:
             _clear_row(row=row, now=now)
 
+
+def prune_auth_login_throttles(
+    *,
+    now: datetime,
+    older_than_days: int,
+    limit: int,
+    db: Session,
+) -> int:
+    safe_older_than_days = max(1, int(older_than_days))
+    safe_limit = max(1, int(limit))
+    threshold = now - timedelta(days=safe_older_than_days)
+
+    candidate_ids = [
+        row.id
+        for row in (
+            db.query(AuthLoginThrottle.id)
+            .filter(AuthLoginThrottle.updated_at <= threshold)
+            .order_by(AuthLoginThrottle.updated_at.asc(), AuthLoginThrottle.id.asc())
+            .limit(safe_limit)
+            .all()
+        )
+    ]
+    if not candidate_ids:
+        return 0
+
+    deleted = (
+        db.query(AuthLoginThrottle)
+        .filter(AuthLoginThrottle.id.in_(candidate_ids))
+        .delete(synchronize_session=False)
+    )
+    db.flush()
+    return int(deleted or 0)
+

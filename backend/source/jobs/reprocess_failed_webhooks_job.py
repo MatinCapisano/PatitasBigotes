@@ -12,6 +12,7 @@ from sqlalchemy.exc import ProgrammingError
 from source.db.session import SessionLocal
 from source.services.mercadopago_client import (
     WebhookNoOpError,
+    _is_retryable_noop_error,
     process_mercadopago_event_payload,
 )
 from source.services.payment_s import (
@@ -208,19 +209,34 @@ def run_once(
                     db=db,
                 )
             except WebhookNoOpError as exc:
-                mark_webhook_event_processed(
-                    provider=PROVIDER,
-                    event_key=event_key,
-                    db=db,
-                )
-                db.commit()
-                metrics["reprocessed_noop"] += 1
-                logger.info(
-                    "event=webhook_reprocess_noop provider=%s event_key=%s reason=%s",
-                    PROVIDER,
-                    event_key,
-                    str(exc),
-                )
+                if _is_retryable_noop_error(exc):
+                    mark_webhook_event_failed(
+                        provider=PROVIDER,
+                        event_key=event_key,
+                        error_message=str(exc),
+                        retry_delay_minutes=retry_delay_minutes,
+                        max_attempts=max_attempts,
+                        db=db,
+                    )
+                    db.commit()
+                    if will_dead_letter:
+                        metrics["dead_lettered"] += 1
+                    else:
+                        metrics["still_failed"] += 1
+                else:
+                    mark_webhook_event_processed(
+                        provider=PROVIDER,
+                        event_key=event_key,
+                        db=db,
+                    )
+                    db.commit()
+                    metrics["reprocessed_noop"] += 1
+                    logger.info(
+                        "event=webhook_reprocess_noop provider=%s event_key=%s reason=%s",
+                        PROVIDER,
+                        event_key,
+                        str(exc),
+                    )
             except Exception as exc:
                 mark_webhook_event_failed(
                     provider=PROVIDER,

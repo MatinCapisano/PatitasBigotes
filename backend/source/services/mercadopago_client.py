@@ -48,6 +48,11 @@ class WebhookInvalidSignatureError(Exception):
     pass
 
 
+def _is_retryable_noop_error(exc: WebhookNoOpError) -> bool:
+    message = str(exc or "").strip().lower()
+    return message == "payment not found"
+
+
 def _normalize_event_key_part(value: object) -> str | None:
     if value is None:
         return None
@@ -322,12 +327,20 @@ def resolver_evento_webhook_mercadopago(
             data_id=data_id,
             db=db,
         )
-    except WebhookNoOpError:
-        mark_webhook_event_processed(
-            provider="mercadopago",
-            event_key=event_key,
-            db=db,
-        )
+    except WebhookNoOpError as exc:
+        if _is_retryable_noop_error(exc):
+            mark_webhook_event_failed(
+                provider="mercadopago",
+                event_key=event_key,
+                error_message=str(exc),
+                db=db,
+            )
+        else:
+            mark_webhook_event_processed(
+                provider="mercadopago",
+                event_key=event_key,
+                db=db,
+            )
         raise
     except Exception as exc:
         mark_webhook_event_failed(

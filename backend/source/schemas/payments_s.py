@@ -10,3 +10,8 @@ class CreateOrderPaymentRequest(BaseModel):
         default=None,
     )
     expires_in_minutes: int = Field(default=60, gt=0, le=1440)
+
+
+class AdminWebhookReplayRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    event_key: str = Field(min_length=1, max_length=255)

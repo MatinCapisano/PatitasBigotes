@@ -17,6 +17,7 @@ from source.db.config import (
     get_mercadopago_success_url,
 )
 from source.db.models import Order, Payment, WebhookEvent
+from source.exceptions import WebhookReplayConflictError
 from source.services.mercadopago_client import create_checkout_preference
 from source.services.money_s import parse_amount_to_cents
 from source.services.stock_reservations_s import (
@@ -92,6 +93,21 @@ def _normalize_webhook_key_part(value: object) -> str | None:
     if value is None:
         return None
     normalized = str(value).strip()
+    if not normalized:
+        return None
+    return normalized
+
+
+def _extract_webhook_data_id(payload: dict | None) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    raw = data.get("id")
+    if raw is None:
+        return None
+    normalized = str(raw).strip()
     if not normalized:
         return None
     return normalized
@@ -305,6 +321,136 @@ def get_webhook_reprocess_metrics(
         "failed_not_due": int(failed_not_due or 0),
         "dead_letter": int(dead_letter or 0),
         "oldest_failed_age_seconds": int(oldest_failed_age_seconds),
+    }
+
+
+def replay_webhook_event_by_key(
+    *,
+    provider: str,
+    event_key: str,
+    db: Session,
+    retry_delay_minutes: int = DEFAULT_WEBHOOK_RETRY_DELAY_MINUTES,
+    max_attempts: int = DEFAULT_WEBHOOK_MAX_ATTEMPTS,
+) -> dict:
+    normalized_provider = _normalize_webhook_key_part(provider)
+    normalized_key = _normalize_webhook_key_part(event_key)
+    if normalized_provider is None:
+        raise ValueError("provider is required")
+    if normalized_key is None:
+        raise ValueError("event_key is required")
+    if normalized_provider != "mercadopago":
+        raise ValueError("unsupported provider")
+
+    event = (
+        db.query(WebhookEvent)
+        .filter(
+            WebhookEvent.provider == normalized_provider,
+            WebhookEvent.event_key == normalized_key,
+        )
+        .with_for_update()
+        .first()
+    )
+    if event is None:
+        raise LookupError("webhook event not found")
+
+    previous_status = str(event.status)
+    if previous_status not in {"failed", "dead_letter"}:
+        raise WebhookReplayConflictError(
+            "webhook event can only be replayed from failed/dead_letter status"
+        )
+
+    payload = _deserialize_provider_payload(event.payload)
+    if payload is None:
+        raise ValueError("invalid stored webhook payload")
+    data_id = _extract_webhook_data_id(payload)
+    if data_id is None:
+        raise ValueError("stored webhook payload is missing data.id")
+
+    event.status = "processing"
+    event.processed_at = None
+    event.last_error = None
+    event.next_retry_at = None
+    event.dead_letter_at = None
+    db.flush()
+
+    from source.services.mercadopago_client import WebhookNoOpError, process_mercadopago_event_payload
+
+    try:
+        updated_payment = process_mercadopago_event_payload(
+            payload=payload,
+            data_id=data_id,
+            db=db,
+        )
+    except WebhookNoOpError as exc:
+        if str(exc).strip().lower() == "payment not found":
+            mark_webhook_event_failed(
+                provider=normalized_provider,
+                event_key=normalized_key,
+                error_message=str(exc),
+                retry_delay_minutes=retry_delay_minutes,
+                max_attempts=max_attempts,
+                db=db,
+            )
+        else:
+            mark_webhook_event_processed(
+                provider=normalized_provider,
+                event_key=normalized_key,
+                db=db,
+            )
+        refreshed = (
+            db.query(WebhookEvent)
+            .filter(
+                WebhookEvent.provider == normalized_provider,
+                WebhookEvent.event_key == normalized_key,
+            )
+            .first()
+        )
+        return {
+            "event_key": normalized_key,
+            "previous_status": previous_status,
+            "new_status": str(refreshed.status if refreshed is not None else "unknown"),
+            "processed": False,
+            "reason": str(exc),
+            "payment": None,
+        }
+    except Exception as exc:
+        mark_webhook_event_failed(
+            provider=normalized_provider,
+            event_key=normalized_key,
+            error_message=str(exc),
+            retry_delay_minutes=retry_delay_minutes,
+            max_attempts=max_attempts,
+            db=db,
+        )
+        refreshed = (
+            db.query(WebhookEvent)
+            .filter(
+                WebhookEvent.provider == normalized_provider,
+                WebhookEvent.event_key == normalized_key,
+            )
+            .first()
+        )
+        return {
+            "event_key": normalized_key,
+            "previous_status": previous_status,
+            "new_status": str(refreshed.status if refreshed is not None else "unknown"),
+            "processed": False,
+            "reason": str(exc),
+            "payment": None,
+        }
+
+    mark_webhook_event_processed(
+        provider=normalized_provider,
+        event_key=normalized_key,
+        db=db,
+    )
+    return {
+        "event_key": normalized_key,
+        "previous_status": previous_status,
+        "new_status": "processed",
+        "processed": True,
+        "reason": None,
+        "payment": updated_payment,
     }
 
 

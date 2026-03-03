@@ -3,12 +3,16 @@ import logging
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
+from source.dependencies.auth_d import require_admin
 from source.db.session import get_db_transactional
+from source.errors import raise_http_error_from_exception
+from source.schemas import AdminWebhookReplayRequest
 from source.services.mercadopago_client import (
     WebhookInvalidSignatureError,
     WebhookNoOpError,
     resolver_evento_webhook_mercadopago,
 )
+from source.services.payment_s import replay_webhook_event_by_key
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -62,3 +66,20 @@ def mercadopago_webhook(
             "payment": result.payment,
         }
     }
+
+
+@router.post("/admin/webhooks/mercadopago/replay")
+def replay_mercadopago_webhook_event(
+    payload: AdminWebhookReplayRequest,
+    _: dict = Depends(require_admin),
+    db: Session = Depends(get_db_transactional),
+):
+    try:
+        result = replay_webhook_event_by_key(
+            provider="mercadopago",
+            event_key=payload.event_key,
+            db=db,
+        )
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+    return {"data": result}

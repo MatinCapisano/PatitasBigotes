@@ -14,7 +14,7 @@ from source.schemas.orders_s import (
     PublicGuestCheckoutRequest,
     UpdateOrderStatusRequest,
 )
-from source.schemas.payments_s import CreateOrderPaymentRequest
+from source.schemas.payments_s import AdminWebhookReplayRequest, CreateOrderPaymentRequest
 from source.schemas.products_s import (
     CreateCategoryRequest,
     CreateProductRequest,
@@ -30,7 +30,7 @@ from source.schemas.stock_reservations_s import (
     ExpireReservationsResponse,
     ReservationResponse,
 )
-from source.schemas.turns_s import CreateTurnRequest
+from source.schemas.turns_s import CreateTurnRequest, UpdateTurnStatusRequest
 from source.schemas.users_s import (
     CreateGuestUserRequest,
     CreateUserRequest,
@@ -55,6 +55,7 @@ __all__ = [
     "CreateDiscountRequest",
     "PayOrderRequest",
     "CreateOrderPaymentRequest",
+    "AdminWebhookReplayRequest",
     "CreateCategoryRequest",
     "CreateProductRequest",
     "CreateVariantRequest",
@@ -65,6 +66,7 @@ __all__ = [
     "PatchProductRequest",
     "PatchVariantRequest",
     "CreateTurnRequest",
+    "UpdateTurnStatusRequest",
     "ReservationResponse",
     "ExpireReservationsResponse",
 ]
