@@ -7,7 +7,7 @@ import uuid
 
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from source.db.config import (
     get_mercadopago_env,
@@ -671,7 +671,9 @@ def _build_mercadopago_payload(
         },
         "notification_url": get_mercadopago_notification_url(),
         "expires": True,
-        "date_of_expiration": expires_at.replace(microsecond=0).isoformat() + "Z",
+        "date_of_expiration": (
+            expires_at.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        ),
         "metadata": {
             "order_id": order_id,
             "payment_id": payment_id,
@@ -896,7 +898,7 @@ def create_payment_for_order(
 
     order = (
         db.query(Order)
-        .options(joinedload(Order.items))
+        .options(selectinload(Order.items))
         .filter(Order.id == order_id)
         .with_for_update()
         .first()
@@ -1120,8 +1122,8 @@ def confirm_manual_payment_for_order(
     order = (
         db.query(Order)
         .options(
-            joinedload(Order.items),
-            joinedload(Order.payments),
+            selectinload(Order.items),
+            selectinload(Order.payments),
         )
         .filter(Order.id == order_id)
         .with_for_update()
@@ -1261,6 +1263,40 @@ def get_payment_for_user(
         raise LookupError("payment not found")
 
     return _payment_to_dict(payment)
+
+
+def get_payment_public_status(
+    *,
+    external_ref: str | None = None,
+    preference_id: str | None = None,
+    db: Session,
+) -> dict:
+    normalized_external_ref = _normalize_optional_str(external_ref)
+    normalized_preference_id = _normalize_optional_str(preference_id)
+    if normalized_external_ref is None and normalized_preference_id is None:
+        raise ValueError("external_ref or preference_id is required")
+    if normalized_external_ref is not None and len(normalized_external_ref) > 255:
+        raise ValueError("external_ref is too long")
+    if normalized_preference_id is not None and len(normalized_preference_id) > 255:
+        raise ValueError("preference_id is too long")
+
+    query = db.query(Payment).options(joinedload(Payment.order)).filter(Payment.method == "mercadopago")
+    if normalized_external_ref is not None:
+        query = query.filter(Payment.external_ref == normalized_external_ref)
+    if normalized_preference_id is not None:
+        query = query.filter(Payment.preference_id == normalized_preference_id)
+
+    payment = query.order_by(Payment.created_at.desc(), Payment.id.desc()).first()
+    if payment is None:
+        raise LookupError("payment not found")
+
+    order = payment.order
+    return {
+        "order_status": str(order.status) if order is not None else None,
+        "status": str(payment.status),
+        "updated_at": payment.updated_at,
+        "paid_at": payment.paid_at,
+    }
 
 
 def submit_bank_transfer_receipt(

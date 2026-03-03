@@ -23,8 +23,10 @@ from source.services.payment_errors import (
 
 try:
     import mercadopago
+    from mercadopago.config.request_options import RequestOptions
 except ImportError as exc:  # pragma: no cover - dependency availability
     mercadopago = None
+    RequestOptions = None
     _import_error = exc
 else:
     _import_error = None
@@ -81,6 +83,23 @@ def _get_sdk():
     return mercadopago.SDK(get_mercadopago_access_token())
 
 
+def _build_request_options(
+    *,
+    idempotency_key: str | None = None,
+) -> RequestOptions:
+    if RequestOptions is None:
+        raise PaymentProviderUnavailableError(
+            "mercadopago SDK request options are unavailable"
+        ) from _import_error
+    custom_headers = None
+    if idempotency_key:
+        custom_headers = {"x-idempotency-key": idempotency_key}
+    return RequestOptions(
+        connection_timeout=float(get_mercadopago_timeout_seconds()),
+        custom_headers=custom_headers,
+    )
+
+
 def _handle_response_status(status: int, *, operation: str) -> None:
     if status in {400, 404, 422}:
         raise PaymentProviderValidationError(f"mercadopago {operation} rejected")
@@ -96,12 +115,13 @@ def create_checkout_preference(
     idempotency_key: str | None = None,
 ) -> dict:
     sdk = _get_sdk()
-    options = {"timeout": get_mercadopago_timeout_seconds()}
-    if idempotency_key:
-        options["headers"] = {"x-idempotency-key": idempotency_key}
+    request_options = _build_request_options(idempotency_key=idempotency_key)
     for attempt in range(1, MAX_RETRY_ATTEMPTS + 1):
         try:
-            response = sdk.preference().create(preference_payload, options)
+            response = sdk.preference().create(
+                preference_payload,
+                request_options=request_options,
+            )
         except TimeoutError as exc:
             if attempt == MAX_RETRY_ATTEMPTS:
                 raise PaymentProviderTimeoutError(
@@ -152,10 +172,13 @@ def get_payment_by_id(payment_id: str | int) -> dict:
     if not payment_id_str:
         raise PaymentProviderValidationError("mercadopago payment id is required")
 
-    options = {"timeout": get_mercadopago_timeout_seconds()}
+    request_options = _build_request_options()
     for attempt in range(1, MAX_RETRY_ATTEMPTS + 1):
         try:
-            response = sdk.payment().get(payment_id_str, options)
+            response = sdk.payment().get(
+                payment_id_str,
+                request_options=request_options,
+            )
         except TimeoutError as exc:
             if attempt == MAX_RETRY_ATTEMPTS:
                 raise PaymentProviderTimeoutError(
@@ -204,10 +227,13 @@ def find_latest_payment_by_external_reference(external_reference: str) -> dict |
         "criteria": "desc",
         "limit": 1,
     }
-    options = {"timeout": get_mercadopago_timeout_seconds()}
+    request_options = _build_request_options()
     for attempt in range(1, MAX_RETRY_ATTEMPTS + 1):
         try:
-            response = sdk.payment().search(request_payload, options)
+            response = sdk.payment().search(
+                request_payload,
+                request_options=request_options,
+            )
         except TimeoutError as exc:
             if attempt == MAX_RETRY_ATTEMPTS:
                 raise PaymentProviderTimeoutError("mercadopago request timed out") from exc

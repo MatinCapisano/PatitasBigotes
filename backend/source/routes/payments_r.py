@@ -4,7 +4,11 @@ from sqlalchemy.orm import Session
 from source.dependencies.auth_d import get_current_user, get_current_user_id, require_admin
 from source.db.session import get_db_transactional
 from source.errors import raise_http_error_from_exception
-from source.services.payment_s import get_payment_for_user, list_pending_bank_transfer_payments_for_admin
+from source.services.payment_s import (
+    get_payment_for_user,
+    get_payment_public_status,
+    list_pending_bank_transfer_payments_for_admin,
+)
 
 router = APIRouter()
 
@@ -26,6 +30,23 @@ def get_payment(
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
 
+    return {"data": payment}
+
+
+@router.get("/payments/public/status")
+def get_public_payment_status(
+    external_ref: str | None = None,
+    preference_id: str | None = None,
+    db: Session = Depends(get_db_transactional),
+):
+    try:
+        payment = get_payment_public_status(
+            external_ref=external_ref,
+            preference_id=preference_id,
+            db=db,
+        )
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
     return {"data": payment}
 
 
