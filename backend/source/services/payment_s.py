@@ -5,7 +5,7 @@ import hashlib
 import json
 import uuid
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
@@ -27,6 +27,8 @@ from source.services.stock_reservations_s import (
 
 ALLOWED_PAYMENT_METHODS = {"bank_transfer", "mercadopago"}
 RETRYABLE_PAYMENT_STATUSES = {"cancelled", "expired"}
+DEFAULT_WEBHOOK_MAX_ATTEMPTS = 4
+DEFAULT_WEBHOOK_RETRY_DELAY_MINUTES = 60
 MERCADOPAGO_PROVIDER_TO_INTERNAL_STATUS = {
     "approved": "paid",
     "accredited": "paid",
@@ -117,6 +119,8 @@ def acquire_webhook_event(
         received_at=now,
         processed_at=None,
         last_error=None,
+        next_retry_at=None,
+        dead_letter_at=None,
     )
     try:
         with db.begin_nested():
@@ -135,11 +139,13 @@ def acquire_webhook_event(
         )
         if existing is None:
             return False
-        if existing.status == "failed":
+        if existing.status in {"failed", "dead_letter"}:
             existing.status = "processing"
             existing.received_at = now
             existing.processed_at = None
             existing.last_error = None
+            existing.next_retry_at = None
+            existing.dead_letter_at = None
             if isinstance(payload, dict):
                 existing.payload = _serialize_provider_payload(payload)
             db.flush()
@@ -166,6 +172,8 @@ def mark_webhook_event_processed(
     event.status = "processed"
     event.processed_at = datetime.utcnow()
     event.last_error = None
+    event.next_retry_at = None
+    event.dead_letter_at = None
     db.flush()
 
 
@@ -174,8 +182,15 @@ def mark_webhook_event_failed(
     provider: str,
     event_key: str,
     error_message: str,
+    retry_delay_minutes: int = DEFAULT_WEBHOOK_RETRY_DELAY_MINUTES,
+    max_attempts: int = DEFAULT_WEBHOOK_MAX_ATTEMPTS,
     db: Session,
 ) -> None:
+    if retry_delay_minutes <= 0:
+        raise ValueError("retry_delay_minutes must be greater than 0")
+    if max_attempts <= 0:
+        raise ValueError("max_attempts must be greater than 0")
+
     event = (
         db.query(WebhookEvent)
         .filter(
@@ -186,10 +201,110 @@ def mark_webhook_event_failed(
     )
     if event is None:
         return
-    event.status = "failed"
-    event.processed_at = datetime.utcnow()
+    now = datetime.utcnow()
+    event.attempt_count = int(event.attempt_count or 0) + 1
+    event.processed_at = now
     event.last_error = (error_message or "webhook processing failed")[:2000]
+    if int(event.attempt_count) >= int(max_attempts):
+        event.status = "dead_letter"
+        event.dead_letter_at = now
+        event.next_retry_at = None
+    else:
+        event.status = "failed"
+        event.dead_letter_at = None
+        event.next_retry_at = now + timedelta(minutes=int(retry_delay_minutes))
     db.flush()
+
+
+def list_retryable_failed_webhook_events(
+    *,
+    provider: str,
+    limit: int,
+    now: datetime,
+    db: Session,
+) -> list[WebhookEvent]:
+    normalized_provider = _normalize_webhook_key_part(provider)
+    if normalized_provider is None:
+        raise ValueError("provider is required")
+    if limit <= 0:
+        raise ValueError("limit must be greater than 0")
+
+    return (
+        db.query(WebhookEvent)
+        .filter(
+            WebhookEvent.provider == normalized_provider,
+            WebhookEvent.status == "failed",
+            or_(WebhookEvent.next_retry_at.is_(None), WebhookEvent.next_retry_at <= now),
+            WebhookEvent.dead_letter_at.is_(None),
+        )
+        .order_by(WebhookEvent.next_retry_at.asc(), WebhookEvent.processed_at.asc(), WebhookEvent.id.asc())
+        .limit(int(limit))
+        .all()
+    )
+
+
+def get_webhook_reprocess_metrics(
+    *,
+    provider: str,
+    now: datetime,
+    db: Session,
+) -> dict[str, int]:
+    normalized_provider = _normalize_webhook_key_part(provider)
+    if normalized_provider is None:
+        raise ValueError("provider is required")
+
+    failed_due = (
+        db.query(func.count(WebhookEvent.id))
+        .filter(
+            WebhookEvent.provider == normalized_provider,
+            WebhookEvent.status == "failed",
+            or_(WebhookEvent.next_retry_at.is_(None), WebhookEvent.next_retry_at <= now),
+            WebhookEvent.dead_letter_at.is_(None),
+        )
+        .scalar()
+    )
+    failed_not_due = (
+        db.query(func.count(WebhookEvent.id))
+        .filter(
+            WebhookEvent.provider == normalized_provider,
+            WebhookEvent.status == "failed",
+            WebhookEvent.next_retry_at.is_not(None),
+            WebhookEvent.next_retry_at > now,
+            WebhookEvent.dead_letter_at.is_(None),
+        )
+        .scalar()
+    )
+    dead_letter = (
+        db.query(func.count(WebhookEvent.id))
+        .filter(
+            WebhookEvent.provider == normalized_provider,
+            WebhookEvent.status == "dead_letter",
+            WebhookEvent.dead_letter_at.is_not(None),
+        )
+        .scalar()
+    )
+    oldest_failed_received_at = (
+        db.query(func.min(WebhookEvent.received_at))
+        .filter(
+            WebhookEvent.provider == normalized_provider,
+            WebhookEvent.status == "failed",
+            WebhookEvent.dead_letter_at.is_(None),
+        )
+        .scalar()
+    )
+    oldest_failed_age_seconds = 0
+    if oldest_failed_received_at is not None:
+        oldest_failed_age_seconds = max(
+            0,
+            int((now - oldest_failed_received_at).total_seconds()),
+        )
+
+    return {
+        "failed_due": int(failed_due or 0),
+        "failed_not_due": int(failed_not_due or 0),
+        "dead_letter": int(dead_letter or 0),
+        "oldest_failed_age_seconds": int(oldest_failed_age_seconds),
+    }
 
 
 def _normalize_optional_str(value: str | None) -> str | None:

@@ -94,6 +94,7 @@ def create_guest_checkout_order(
             client_ip=_client_ip_from_request(request),
             email=payload.customer.email,
             website=payload.website,
+            db=db,
         )
         result = create_manual_submitted_order(
             email=payload.customer.email,

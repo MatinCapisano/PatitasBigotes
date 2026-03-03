@@ -1,7 +1,11 @@
 import hashlib
 import hmac
+import time
 
-from source.db.config import get_mercadopago_webhook_secret
+from source.db.config import (
+    get_mercadopago_webhook_max_age_seconds,
+    get_mercadopago_webhook_secret,
+)
 
 
 def _extract_mercadopago_data_id(payload: dict) -> str | None:
@@ -41,6 +45,19 @@ def is_mercadopago_signature_valid(
     ts, v1 = _parse_mercadopago_signature_header(signature_header)
     if not normalized_request_id or not ts or not v1:
         return False
+
+    try:
+        ts_int = int(ts)
+    except (TypeError, ValueError):
+        return False
+    now_ts = int(time.time())
+    max_age_seconds = get_mercadopago_webhook_max_age_seconds()
+    # Reject old or far-future signed requests (replay/skew window).
+    if ts_int < now_ts - max_age_seconds:
+        return False
+    if ts_int > now_ts + 60:
+        return False
+
     manifest = f"id:{data_id};request-id:{normalized_request_id};ts:{ts};"
     secret = get_mercadopago_webhook_secret()
     expected = hmac.new(

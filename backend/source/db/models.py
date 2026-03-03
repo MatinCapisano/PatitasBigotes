@@ -296,6 +296,16 @@ class Payment(Base):
 
 class WebhookEvent(Base):
     __tablename__ = "webhook_events"
+    __table_args__ = (
+        CheckConstraint("attempt_count >= 0", name="ck_webhook_events_attempt_count_non_negative"),
+        Index(
+            "ix_webhook_events_provider_status_retry",
+            "provider",
+            "status",
+            "next_retry_at",
+        ),
+        Index("ix_webhook_events_dead_letter_at", "dead_letter_at"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     provider = Column(String, nullable=False, index=True)
@@ -305,6 +315,9 @@ class WebhookEvent(Base):
     received_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     processed_at = Column(DateTime, nullable=True)
     last_error = Column(Text, nullable=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    next_retry_at = Column(DateTime, nullable=True)
+    dead_letter_at = Column(DateTime, nullable=True)
 
 
 class StockReservation(Base):

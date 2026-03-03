@@ -32,6 +32,7 @@ def create_user(
         enforce_public_signup_limits(
             client_ip=_client_ip_from_request(request),
             email=payload.email,
+            db=db,
         )
         created_user = create_user_service(payload=payload, db=db)
     except Exception as exc:

@@ -97,6 +97,9 @@ PRAGMA foreign_keys=on;
 ## Webhook inbox migration (MercadoPago idempotency)
 
 Webhook events are now deduplicated with a DB inbox table (`webhook_events`).
+Webhook signature freshness is also enforced with `x-signature ts`:
+requests older than `MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS` (default 300s)
+or too far in the future are rejected.
 
 ### SQL migration
 
@@ -107,13 +110,72 @@ CREATE TABLE webhook_events (
   event_key VARCHAR NOT NULL UNIQUE,
   status VARCHAR NOT NULL DEFAULT 'processing',
   payload TEXT,
-  received_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  processed_at DATETIME,
-  last_error TEXT
+  received_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  processed_at TIMESTAMP,
+  last_error TEXT,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  next_retry_at TIMESTAMP,
+  dead_letter_at TIMESTAMP
 );
 
 CREATE INDEX ix_webhook_events_provider ON webhook_events(provider);
 CREATE UNIQUE INDEX ux_webhook_events_event_key ON webhook_events(event_key);
+CREATE INDEX ix_webhook_events_provider_status_retry
+  ON webhook_events(provider, status, next_retry_at);
+CREATE INDEX ix_webhook_events_dead_letter_at ON webhook_events(dead_letter_at);
+```
+
+If `webhook_events` already exists, apply:
+
+```sql
+ALTER TABLE webhook_events ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE webhook_events ADD COLUMN next_retry_at TIMESTAMP;
+ALTER TABLE webhook_events ADD COLUMN dead_letter_at TIMESTAMP;
+
+CREATE INDEX ix_webhook_events_provider_status_retry
+  ON webhook_events(provider, status, next_retry_at);
+CREATE INDEX ix_webhook_events_dead_letter_at ON webhook_events(dead_letter_at);
+```
+
+## Failed webhook reprocess job
+
+If webhook processing fails (`webhook_events.status='failed'`), you can reprocess
+those events in background without waiting for provider retries.
+
+Run once:
+
+```bash
+python -m source.jobs.reprocess_failed_webhooks_job --once
+```
+
+Run periodically (default every 60 minutes, batch 25):
+
+```bash
+python -m source.jobs.reprocess_failed_webhooks_job
+```
+
+Dead-letter + retry policy defaults (small store profile):
+
+1. `WEBHOOK_REPROCESS_INTERVAL_MINUTES=60`
+2. `WEBHOOK_REPROCESS_BATCH_SIZE=25`
+3. `WEBHOOK_REPROCESS_MAX_ATTEMPTS=4`
+4. `WEBHOOK_REPROCESS_BASE_DELAY_MINUTES=30`
+5. `WEBHOOK_REPROCESS_MAX_DELAY_MINUTES=720` (12h cap)
+
+Override runtime values:
+
+```bash
+python -m source.jobs.reprocess_failed_webhooks_job --interval-minutes 120 --batch-size 100 --max-attempts 5 --base-delay-minutes 20 --max-delay-minutes 360
+```
+
+Or via env vars:
+
+```bash
+WEBHOOK_REPROCESS_INTERVAL_MINUTES=120
+WEBHOOK_REPROCESS_BATCH_SIZE=100
+WEBHOOK_REPROCESS_MAX_ATTEMPTS=5
+WEBHOOK_REPROCESS_BASE_DELAY_MINUTES=20
+WEBHOOK_REPROCESS_MAX_DELAY_MINUTES=360
 ```
 
 ## Stock reservations migration (orders submitted)

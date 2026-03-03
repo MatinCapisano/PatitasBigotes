@@ -75,3 +75,11 @@ def get_mercadopago_webhook_secret() -> str:
     if secret:
         return secret
     raise RuntimeError("MERCADOPAGO_WEBHOOK_SECRET is required")
+
+
+def get_mercadopago_webhook_max_age_seconds() -> int:
+    raw_value = os.getenv("MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS", "300").strip()
+    max_age = int(raw_value)
+    if max_age <= 0:
+        raise RuntimeError("MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS must be greater than 0")
+    return max_age

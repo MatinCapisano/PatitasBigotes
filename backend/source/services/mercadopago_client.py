@@ -187,6 +187,38 @@ def get_payment_by_id(payment_id: str | int) -> dict:
     raise PaymentProviderUnavailableError("mercadopago payment lookup failed")
 
 
+def process_mercadopago_event_payload(
+    *,
+    payload: dict,
+    data_id: str,
+    db: Session,
+) -> dict:
+    # Local imports avoid a module cycle: payment_s imports this client module.
+    from source.services.payment_s import (
+        apply_mercadopago_normalized_state,
+        find_payment_for_mercadopago_event,
+        normalize_mp_payment_state,
+    )
+
+    mp_payment = get_payment_by_id(data_id)
+    normalized_state = normalize_mp_payment_state(mp_payment)
+    external_ref = str(normalized_state["external_reference"])
+    payment = find_payment_for_mercadopago_event(
+        preference_id=None,
+        external_ref=external_ref,
+        db=db,
+    )
+    if payment is None:
+        raise WebhookNoOpError("payment not found")
+
+    return apply_mercadopago_normalized_state(
+        payment_id=int(payment["id"]),
+        normalized_state=normalized_state,
+        notification_payload=payload,
+        db=db,
+    )
+
+
 def resolver_evento_webhook_mercadopago(
     *,
     payload: dict,
@@ -218,11 +250,8 @@ def resolver_evento_webhook_mercadopago(
     # Local imports avoid a module cycle: payment_s imports this client module.
     from source.services.payment_s import (
         acquire_webhook_event,
-        apply_mercadopago_normalized_state,
-        find_payment_for_mercadopago_event,
         mark_webhook_event_failed,
         mark_webhook_event_processed,
-        normalize_mp_payment_state,
     )
 
     acquired = acquire_webhook_event(
@@ -235,22 +264,9 @@ def resolver_evento_webhook_mercadopago(
         raise WebhookNoOpError("duplicate webhook event")
 
     try:
-        mp_payment = get_payment_by_id(data_id)
-        normalized_state = normalize_mp_payment_state(mp_payment)
-        external_ref = str(normalized_state["external_reference"])
-        payment = find_payment_for_mercadopago_event(
-            preference_id=None,
-            external_ref=external_ref,
-            db=db,
-        )
-
-        if payment is None:
-            raise WebhookNoOpError("payment not found")
-
-        updated_payment = apply_mercadopago_normalized_state(
-            payment_id=int(payment["id"]),
-            normalized_state=normalized_state,
-            notification_payload=payload,
+        updated_payment = process_mercadopago_event_payload(
+            payload=payload,
+            data_id=data_id,
             db=db,
         )
     except WebhookNoOpError:

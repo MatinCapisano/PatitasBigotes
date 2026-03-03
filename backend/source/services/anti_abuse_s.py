@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
-from threading import Lock
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from source.db.models import AuthLoginThrottle
 
 IP_WINDOW = timedelta(minutes=5)
 IP_MAX_REQUESTS = 20
@@ -12,24 +14,121 @@ EMAIL_WINDOW = timedelta(minutes=10)
 EMAIL_MAX_REQUESTS = 6
 EMAIL_MIN_INTERVAL_SECONDS = 20
 
-_lock = Lock()
-_ip_hits: dict[str, deque[datetime]] = defaultdict(deque)
-_email_hits: dict[str, deque[datetime]] = defaultdict(deque)
-_last_email_hit: dict[str, datetime] = {}
+SIGNUP_SCOPE_IP = "public_signup_ip"
+SIGNUP_SCOPE_EMAIL_WINDOW = "public_signup_email_window"
+SIGNUP_SCOPE_EMAIL_INTERVAL = "public_signup_email_interval"
+
+CHECKOUT_SCOPE_IP = "public_checkout_ip"
+CHECKOUT_SCOPE_EMAIL_WINDOW = "public_checkout_email_window"
+CHECKOUT_SCOPE_EMAIL_INTERVAL = "public_checkout_email_interval"
 
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _prune(queue: deque[datetime], *, now: datetime, window: timedelta) -> None:
-    cutoff = now - window
-    while queue and queue[0] < cutoff:
-        queue.popleft()
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _normalize_email(value: str) -> str:
     return str(value).strip().lower()
+
+
+def _normalize_ip(value: str) -> str:
+    normalized = str(value).strip()
+    return normalized if normalized else "unknown"
+
+
+def _get_or_create_locked_row(
+    *,
+    scope: str,
+    key: str,
+    now: datetime,
+    db: Session,
+) -> tuple[AuthLoginThrottle, bool]:
+    row = (
+        db.query(AuthLoginThrottle)
+        .filter(AuthLoginThrottle.scope == scope, AuthLoginThrottle.key == key)
+        .with_for_update()
+        .first()
+    )
+    if row is not None:
+        return row, False
+
+    row = AuthLoginThrottle(
+        scope=scope,
+        key=key,
+        failed_count=0,
+        window_started_at=now,
+        blocked_until=None,
+        updated_at=now,
+    )
+    try:
+        with db.begin_nested():
+            db.add(row)
+            db.flush()
+    except IntegrityError:
+        row = (
+            db.query(AuthLoginThrottle)
+            .filter(AuthLoginThrottle.scope == scope, AuthLoginThrottle.key == key)
+            .with_for_update()
+            .first()
+        )
+        if row is None:
+            raise
+    return row, True
+
+
+def _enforce_window_limit(
+    *,
+    row: AuthLoginThrottle,
+    now: datetime,
+    window: timedelta,
+    max_requests: int,
+    detail: str,
+) -> None:
+    window_started_at = _as_utc(row.window_started_at) or now
+    if now > window_started_at + window:
+        row.failed_count = 0
+        row.window_started_at = now
+
+    if int(row.failed_count) >= int(max_requests):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=detail,
+        )
+
+    row.failed_count = int(row.failed_count) + 1
+    row.updated_at = now
+
+
+def _enforce_min_interval(
+    *,
+    row: AuthLoginThrottle,
+    now: datetime,
+    min_interval_seconds: int,
+    detail: str,
+    skip_if_new: bool = False,
+) -> None:
+    if skip_if_new:
+        row.updated_at = now
+        return
+
+    last_hit_at = _as_utc(row.updated_at)
+    if last_hit_at is not None:
+        elapsed = (now - last_hit_at).total_seconds()
+        if elapsed < float(min_interval_seconds):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=detail,
+            )
+
+    row.updated_at = now
 
 
 def enforce_public_guest_checkout_limits(
@@ -37,6 +136,7 @@ def enforce_public_guest_checkout_limits(
     client_ip: str,
     email: str,
     website: str | None = None,
+    db: Session,
 ) -> None:
     if website is not None and str(website).strip():
         raise HTTPException(
@@ -47,9 +147,13 @@ def enforce_public_guest_checkout_limits(
     _enforce_public_email_ip_limits(
         client_ip=client_ip,
         email=email,
+        ip_scope=CHECKOUT_SCOPE_IP,
+        email_window_scope=CHECKOUT_SCOPE_EMAIL_WINDOW,
+        email_interval_scope=CHECKOUT_SCOPE_EMAIL_INTERVAL,
         ip_detail="too many checkout attempts from this ip",
         email_detail="too many checkout attempts for this email",
         interval_detail="please wait before retrying checkout",
+        db=db,
     )
 
 
@@ -57,13 +161,18 @@ def enforce_public_signup_limits(
     *,
     client_ip: str,
     email: str,
+    db: Session,
 ) -> None:
     _enforce_public_email_ip_limits(
         client_ip=client_ip,
         email=email,
+        ip_scope=SIGNUP_SCOPE_IP,
+        email_window_scope=SIGNUP_SCOPE_EMAIL_WINDOW,
+        email_interval_scope=SIGNUP_SCOPE_EMAIL_INTERVAL,
         ip_detail="too many signup attempts from this ip",
         email_detail="too many signup attempts for this email",
         interval_detail="please wait before retrying signup",
+        db=db,
     )
 
 
@@ -71,40 +180,56 @@ def _enforce_public_email_ip_limits(
     *,
     client_ip: str,
     email: str,
+    ip_scope: str,
+    email_window_scope: str,
+    email_interval_scope: str,
     ip_detail: str,
     email_detail: str,
     interval_detail: str,
+    db: Session,
 ) -> None:
-    normalized_ip = str(client_ip).strip() or "unknown"
+    normalized_ip = _normalize_ip(client_ip)
     normalized_email = _normalize_email(email)
     now = _utc_now()
 
-    with _lock:
-        ip_queue = _ip_hits[normalized_ip]
-        _prune(ip_queue, now=now, window=IP_WINDOW)
-        if len(ip_queue) >= IP_MAX_REQUESTS:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=ip_detail,
-            )
+    ip_row, _ = _get_or_create_locked_row(
+        scope=ip_scope,
+        key=normalized_ip,
+        now=now,
+        db=db,
+    )
+    email_window_row, _ = _get_or_create_locked_row(
+        scope=email_window_scope,
+        key=normalized_email,
+        now=now,
+        db=db,
+    )
+    email_interval_row, email_interval_created = _get_or_create_locked_row(
+        scope=email_interval_scope,
+        key=normalized_email,
+        now=now,
+        db=db,
+    )
 
-        email_queue = _email_hits[normalized_email]
-        _prune(email_queue, now=now, window=EMAIL_WINDOW)
-        if len(email_queue) >= EMAIL_MAX_REQUESTS:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=email_detail,
-            )
-
-        last_hit = _last_email_hit.get(normalized_email)
-        if last_hit is not None:
-            elapsed = (now - last_hit).total_seconds()
-            if elapsed < EMAIL_MIN_INTERVAL_SECONDS:
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=interval_detail,
-                )
-
-        ip_queue.append(now)
-        email_queue.append(now)
-        _last_email_hit[normalized_email] = now
+    _enforce_window_limit(
+        row=ip_row,
+        now=now,
+        window=IP_WINDOW,
+        max_requests=IP_MAX_REQUESTS,
+        detail=ip_detail,
+    )
+    _enforce_window_limit(
+        row=email_window_row,
+        now=now,
+        window=EMAIL_WINDOW,
+        max_requests=EMAIL_MAX_REQUESTS,
+        detail=email_detail,
+    )
+    _enforce_min_interval(
+        row=email_interval_row,
+        now=now,
+        min_interval_seconds=EMAIL_MIN_INTERVAL_SECONDS,
+        detail=interval_detail,
+        skip_if_new=email_interval_created,
+    )
+    db.flush()
