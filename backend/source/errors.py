@@ -2,6 +2,8 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from source.exceptions import OrderStatusTransitionError
+
 
 def raise_http_error_from_exception(exc: Exception, db: Session | None = None) -> None:
     if db is not None and isinstance(exc, (IntegrityError, SQLAlchemyError)):
@@ -9,6 +11,8 @@ def raise_http_error_from_exception(exc: Exception, db: Session | None = None) -
 
     if isinstance(exc, LookupError):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if isinstance(exc, OrderStatusTransitionError):
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, ValueError):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if isinstance(exc, IntegrityError):

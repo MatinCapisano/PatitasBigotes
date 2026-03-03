@@ -1,10 +1,12 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from datetime import datetime
+import logging
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session, joinedload
 
 from source.db.models import Order, OrderItem, ProductVariant
+from source.exceptions import OrderStatusTransitionError
 from source.services.discount_s import (
     calculate_line_pricing,
     list_discounts,
@@ -22,10 +24,56 @@ from source.services.stock_reservations_s import (
 from source.services.users_s import get_or_create_user_by_contact, serialize_user_basic
 
 ALLOWED_ORDER_STATUS = {"draft", "submitted", "paid", "cancelled"}
+ORDER_TERMINAL_STATUSES = {"paid", "cancelled"}
+ORDER_ALLOWED_TRANSITIONS = {
+    "draft": {"draft", "submitted"},
+    "submitted": {"submitted", "paid", "cancelled"},
+    "paid": {"paid"},
+    "cancelled": {"cancelled"},
+}
+
+logger = logging.getLogger(__name__)
 
 
 def _utc_now() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(UTC)
+
+
+def _validate_order_transition(*, current_status: str, new_status: str) -> None:
+    allowed = ORDER_ALLOWED_TRANSITIONS.get(current_status, set())
+    if new_status in allowed:
+        return
+    if current_status in ORDER_TERMINAL_STATUSES:
+        raise OrderStatusTransitionError(
+            f"cannot transition terminal order from {current_status} to {new_status}"
+        )
+    raise OrderStatusTransitionError(f"invalid transition {current_status} -> {new_status}")
+
+
+def _assert_transition_preconditions(
+    *,
+    order: Order,
+    new_status: str,
+    is_admin: bool,
+    payment_ref: str | None,
+    paid_amount: int | None,
+) -> None:
+    if new_status not in ALLOWED_ORDER_STATUS:
+        raise ValueError("invalid status")
+
+    if new_status != "paid" and (payment_ref is not None or paid_amount is not None):
+        raise ValueError("payment_ref and paid_amount are only valid when status is paid")
+
+    if order.status == "draft" and new_status != "draft" and not order.items:
+        raise ValueError("cannot leave draft with an empty order")
+
+    if new_status == "paid":
+        if not is_admin:
+            raise ValueError("only admins can set status paid manually")
+        if payment_ref is None or not payment_ref.strip():
+            raise ValueError("payment_ref is required when status is paid")
+        if paid_amount is None or int(paid_amount) <= 0:
+            raise ValueError("paid_amount must be greater than 0 when status is paid")
 
 
 def _order_query(db: Session):
@@ -322,12 +370,6 @@ def change_order_status(
 ) -> dict:
     expire_active_reservations_for_order(order_id=order_id, now=_utc_now(), db=db)
 
-    if new_status not in ALLOWED_ORDER_STATUS:
-        raise ValueError("invalid status")
-
-    if new_status != "paid" and (payment_ref is not None or paid_amount is not None):
-        raise ValueError("payment_ref and paid_amount are only valid when status is paid")
-
     order_filter = [Order.id == order_id]
     if not (is_admin and new_status == "paid"):
         order_filter.append(Order.user_id == user_id)
@@ -340,21 +382,37 @@ def change_order_status(
     )
     if order is None:
         raise LookupError("order not found")
-
-    if order.status != "draft" and new_status == "draft":
-        raise ValueError("cannot move non-draft order back to draft")
-
-    if order.status == "draft" and new_status != "draft" and not order.items:
-        raise ValueError("cannot leave draft with an empty order")
+    current_status = str(order.status)
+    logger.info(
+        "event=order_status_transition_attempt order_id=%s user_id=%s is_admin=%s from=%s to=%s",
+        int(order.id),
+        int(user_id),
+        bool(is_admin),
+        current_status,
+        str(new_status),
+    )
+    try:
+        _assert_transition_preconditions(
+            order=order,
+            new_status=new_status,
+            is_admin=bool(is_admin),
+            payment_ref=payment_ref,
+            paid_amount=paid_amount,
+        )
+        _validate_order_transition(current_status=current_status, new_status=new_status)
+    except Exception as exc:
+        logger.warning(
+            "event=order_status_transition_rejected order_id=%s user_id=%s is_admin=%s from=%s to=%s reason=%s",
+            int(order.id),
+            int(user_id),
+            bool(is_admin),
+            current_status,
+            str(new_status),
+            str(exc),
+        )
+        raise
 
     if new_status == "paid":
-        if not is_admin:
-            raise ValueError("only admins can set status paid manually")
-        if payment_ref is None or not payment_ref.strip():
-            raise ValueError("payment_ref is required when status is paid")
-        if paid_amount is None or int(paid_amount) <= 0:
-            raise ValueError("paid_amount must be greater than 0 when status is paid")
-
         confirm_manual_payment_for_order(
             order_id=order.id,
             user_id=order.user_id,
@@ -364,9 +422,25 @@ def change_order_status(
         )
         db.flush()
         db.refresh(order)
+        logger.info(
+            "event=order_status_transition_applied order_id=%s user_id=%s is_admin=%s from=%s to=%s",
+            int(order.id),
+            int(user_id),
+            bool(is_admin),
+            current_status,
+            "paid",
+        )
         return _order_to_dict(order)
 
     if order.status == new_status:
+        logger.info(
+            "event=order_status_transition_applied order_id=%s user_id=%s is_admin=%s from=%s to=%s",
+            int(order.id),
+            int(user_id),
+            bool(is_admin),
+            current_status,
+            str(new_status),
+        )
         return _order_to_dict(order)
 
     if order.status == "draft" and new_status == "submitted":
@@ -391,6 +465,14 @@ def change_order_status(
     order.status = new_status
     db.flush()
     db.refresh(order)
+    logger.info(
+        "event=order_status_transition_applied order_id=%s user_id=%s is_admin=%s from=%s to=%s",
+        int(order.id),
+        int(user_id),
+        bool(is_admin),
+        current_status,
+        str(order.status),
+    )
     return _order_to_dict(order)
 
 
@@ -529,3 +611,5 @@ def get_order_reservations_for_user(
     if order is None:
         raise LookupError("order not found")
     return list_reservations_for_order(order_id=order.id, db=db)
+
+

@@ -1,0 +1,2 @@
+class OrderStatusTransitionError(ValueError):
+    pass
