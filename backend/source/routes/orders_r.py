@@ -19,6 +19,7 @@ from source.services.orders_s import (
     add_item_to_draft_order,
     change_order_status,
     create_manual_submitted_order,
+    get_order_for_admin,
     get_order_reservations_for_user,
     get_or_create_draft_order,
     get_order_for_user,
@@ -39,6 +40,7 @@ from source.services.idempotency_s import (
 from source.services.payment_s import (
     create_payment_for_order,
     create_retry_payment_for_order,
+    list_payments_for_order_admin,
     list_payments_for_order,
     submit_bank_transfer_receipt,
 )
@@ -235,6 +237,21 @@ def get_order(
     return {"data": order}
 
 
+@router.get("/admin/orders/{order_id}")
+def get_order_admin(
+    order_id: int,
+    _: dict = Depends(require_admin),
+    db: Session = Depends(get_db_transactional),
+):
+    try:
+        order = get_order_for_admin(order_id=order_id, db=db)
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return {"data": order}
+
+
 @router.post("/admin/orders/{order_id}/pay/manual")
 def admin_manual_pay_order_endpoint(
     order_id: int,
@@ -302,6 +319,22 @@ def list_order_payments(
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
 
+    return {"data": payments}
+
+
+@router.get("/admin/orders/{order_id}/payments")
+def list_order_payments_admin(
+    order_id: int,
+    _: dict = Depends(require_admin),
+    db: Session = Depends(get_db_transactional),
+):
+    try:
+        payments = list_payments_for_order_admin(
+            order_id=order_id,
+            db=db,
+        )
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
     return {"data": payments}
 
 

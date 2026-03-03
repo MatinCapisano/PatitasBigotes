@@ -3,6 +3,7 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from source.db.init_db import init_db
 from source.routes.auth_r import router as auth_router
 from source.routes.discounts_r import router as discounts_router
 from source.routes.mercadopago_r import router as mercadopago_router
@@ -41,6 +42,12 @@ app.include_router(discounts_router)
 app.include_router(payments_router)
 app.include_router(stock_reservations_router)
 app.include_router(storefront_router)
+
+
+@app.on_event("startup")
+def startup_init_db() -> None:
+    # Project policy: keep init_db up to date and ensure missing tables are created on boot.
+    init_db()
 
 
 @app.get("/health")

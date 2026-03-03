@@ -1229,6 +1229,23 @@ def list_payments_for_order(
     return [_payment_to_dict(payment) for payment in payments]
 
 
+def list_payments_for_order_admin(
+    *,
+    order_id: int,
+    db: Session,
+) -> list[dict]:
+    order_exists = db.query(Order.id).filter(Order.id == order_id).first()
+    if order_exists is None:
+        raise LookupError("order not found")
+    payments = (
+        db.query(Payment)
+        .filter(Payment.order_id == order_id)
+        .order_by(Payment.created_at.desc(), Payment.id.desc())
+        .all()
+    )
+    return [_payment_to_dict(payment) for payment in payments]
+
+
 def get_payment_for_user(
     payment_id: int,
     user_id: int,

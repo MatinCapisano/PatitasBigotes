@@ -83,6 +83,10 @@ def _order_query(db: Session):
     )
 
 
+def _order_lock_query(db: Session):
+    return db.query(Order)
+
+
 def _variant_label(variant: ProductVariant | None) -> str:
     if variant is None:
         return "-/-"
@@ -209,7 +213,7 @@ def get_or_create_draft_order(user_id: int, db: Session) -> tuple[dict, bool]:
 
 def _get_or_create_draft_order_model(user_id: int, db: Session) -> tuple[Order, bool]:
     draft = (
-        _order_query(db)
+        _order_lock_query(db)
         .filter(
             Order.user_id == user_id,
             Order.status == "draft",
@@ -245,6 +249,13 @@ def get_order_for_user(user_id: int, order_id: int, db: Session) -> dict | None:
         )
         .first()
     )
+    if order is None:
+        return None
+    return _order_to_dict(order)
+
+
+def get_order_for_admin(order_id: int, db: Session) -> dict | None:
+    order = _order_query(db).filter(Order.id == order_id).first()
     if order is None:
         return None
     return _order_to_dict(order)
@@ -324,7 +335,7 @@ def add_item_to_draft_order(
 
 def remove_item_from_draft_order(user_id: int, item_id: int, db: Session) -> dict | None:
     draft = (
-        _order_query(db)
+        _order_lock_query(db)
         .filter(
             Order.user_id == user_id,
             Order.status == "draft",
@@ -375,7 +386,7 @@ def change_order_status(
         order_filter.append(Order.user_id == user_id)
 
     order = (
-        _order_query(db)
+        _order_lock_query(db)
         .filter(*order_filter)
         .with_for_update()
         .first()
