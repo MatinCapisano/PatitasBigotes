@@ -9,9 +9,15 @@ from source.schemas.orders_s import (
 )
 from source.schemas.payments_s import CreateOrderPaymentRequest
 from source.schemas.products_s import (
+    CreateCategoryRequest,
     CreateProductRequest,
+    CreateVariantRequest,
+    PatchCategoryRequest,
     PatchProductRequest,
+    PatchVariantRequest,
+    UpdateCategoryRequest,
     UpdateProductRequest,
+    UpdateVariantRequest,
 )
 from source.schemas.stock_reservations_s import (
     ExpireReservationsResponse,
@@ -37,9 +43,15 @@ __all__ = [
     "CreateDiscountRequest",
     "PayOrderRequest",
     "CreateOrderPaymentRequest",
+    "CreateCategoryRequest",
     "CreateProductRequest",
+    "CreateVariantRequest",
+    "UpdateCategoryRequest",
     "UpdateProductRequest",
+    "UpdateVariantRequest",
+    "PatchCategoryRequest",
     "PatchProductRequest",
+    "PatchVariantRequest",
     "CreateTurnRequest",
     "ReservationResponse",
     "ExpireReservationsResponse",

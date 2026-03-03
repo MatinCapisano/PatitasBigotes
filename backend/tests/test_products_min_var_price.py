@@ -57,7 +57,7 @@ class ProductsMinVarPriceTests(unittest.TestCase):
         self.assertIn("min_var_price", product)
         self.assertIsNone(product["min_var_price"])
 
-    def test_get_product_returns_min_var_price_from_all_variants(self) -> None:
+    def test_get_product_returns_min_var_price_from_active_variants_only(self) -> None:
         session = self.TestSession()
         try:
             p = Product(name="P1", description=None, category_id=1)
@@ -106,7 +106,7 @@ class ProductsMinVarPriceTests(unittest.TestCase):
             session.close()
         self.assertIsNotNone(payload)
         assert payload is not None
-        self.assertEqual(payload["min_var_price"], 90000)
+        self.assertEqual(payload["min_var_price"], 120000)
 
     def test_filter_by_min_price_uses_min_var_price(self) -> None:
         session = self.TestSession()
@@ -148,6 +148,45 @@ class ProductsMinVarPriceTests(unittest.TestCase):
             session.close()
         names = [product["name"] for product in data]
         self.assertEqual(names, ["P2"])
+
+    def test_filter_by_min_price_ignores_inactive_variants(self) -> None:
+        session = self.TestSession()
+        try:
+            p1 = Product(name="P1", description=None, category_id=1)
+            session.add(p1)
+            session.flush()
+            session.add_all(
+                [
+                    ProductVariant(
+                        product_id=p1.id,
+                        sku="P1-ACTIVE",
+                        size=None,
+                        color=None,
+                        price=120000,
+                        stock=1,
+                        is_active=True,
+                    ),
+                    ProductVariant(
+                        product_id=p1.id,
+                        sku="P1-INACTIVE",
+                        size=None,
+                        color=None,
+                        price=50000,
+                        stock=0,
+                        is_active=False,
+                    ),
+                ]
+            )
+            session.commit()
+        finally:
+            session.close()
+
+        session = self.TestSession()
+        try:
+            data = products_s.filter_and_sort_products(max_price=100000, db=session)
+        finally:
+            session.close()
+        self.assertEqual(data, [])
 
     def test_sort_by_price_orders_by_min_var_price(self) -> None:
         session = self.TestSession()

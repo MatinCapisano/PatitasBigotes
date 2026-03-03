@@ -36,7 +36,7 @@ def _product_inventory(product: Product) -> tuple[int, int]:
 
 
 def _compute_min_var_price(product: Product) -> int | None:
-    prices = [int(variant.price) for variant in product.variants]
+    prices = [int(variant.price) for variant in product.variants if variant.is_active]
     if not prices:
         return None
     return int(min(prices))
@@ -49,6 +49,7 @@ def _product_to_dict(product: Product) -> dict:
         "name": product.name,
         "description": product.description,
         "min_var_price": _compute_min_var_price(product),
+        "category_id": product.category_id,
         "category": product.category.name if product.category is not None else None,
         "stock": stock,
         "active": active,
@@ -68,6 +69,13 @@ def _variant_to_dict(variant: ProductVariant) -> dict:
     }
 
 
+def _category_to_dict(category: Category) -> dict:
+    return {
+        "id": int(category.id),
+        "name": category.name,
+    }
+
+
 def filter_and_sort_products(
     db: Session | None = None,
     min_price: int | None = None,
@@ -82,6 +90,7 @@ def filter_and_sort_products(
                 ProductVariant.product_id.label("product_id"),
                 func.min(ProductVariant.price).label("min_var_price"),
             )
+            .filter(ProductVariant.is_active.is_(True))
             .group_by(ProductVariant.product_id)
             .subquery()
         )
@@ -284,31 +293,222 @@ def decrement_stock(product_id: int, quantity: int, db: Session) -> dict:
         return _product_to_dict(product)
 
 
-def get_variant_by_id(variant_id: int, db: Session | None = None) -> dict | None:
+def get_variant_by_id(
+    variant_id: int,
+    db: Session | None = None,
+    *,
+    include_inactive: bool = False,
+) -> dict | None:
     with _read_session_scope(db) as (session, _):
-        variant = (
+        query = (
             session.query(ProductVariant)
             .options(joinedload(ProductVariant.product).joinedload(Product.category))
-            .filter(ProductVariant.id == variant_id, ProductVariant.is_active.is_(True))
-            .first()
+            .filter(ProductVariant.id == variant_id)
         )
+        if not include_inactive:
+            query = query.filter(ProductVariant.is_active.is_(True))
+        variant = query.first()
         if variant is None or variant.product is None:
             return None
         return _variant_to_dict(variant)
 
 
-def list_variants_by_product_id(product_id: int, db: Session | None = None) -> list[dict]:
+def list_variants_by_product_id(
+    product_id: int,
+    db: Session | None = None,
+    *,
+    include_inactive: bool = False,
+) -> list[dict]:
     with _read_session_scope(db) as (session, _):
-        variants = (
+        query = (
             session.query(ProductVariant)
             .filter(
                 ProductVariant.product_id == product_id,
-                ProductVariant.is_active.is_(True),
             )
             .order_by(ProductVariant.id.asc())
-            .all()
         )
+        if not include_inactive:
+            query = query.filter(ProductVariant.is_active.is_(True))
+        variants = query.all()
         return [_variant_to_dict(variant) for variant in variants]
+
+
+def list_categories(db: Session | None = None) -> list[dict]:
+    with _read_session_scope(db) as (session, _):
+        categories = session.query(Category).order_by(Category.id.asc()).all()
+        return [_category_to_dict(category) for category in categories]
+
+
+def get_category_by_id(category_id: int, db: Session | None = None) -> dict | None:
+    with _read_session_scope(db) as (session, _):
+        category = session.query(Category).filter(Category.id == category_id).first()
+        if category is None:
+            return None
+        return _category_to_dict(category)
+
+
+def create_category(payload: dict, db: Session) -> dict:
+    name = str(payload.get("name", "")).strip()
+    if not name:
+        raise ValueError("name is required")
+
+    with _write_session_scope(db) as (session, _):
+        existing = session.query(Category).filter(Category.name == name).first()
+        if existing is not None:
+            raise ValueError("category already exists")
+
+        category = Category(name=name)
+        session.add(category)
+        session.flush()
+        return _category_to_dict(category)
+
+
+def update_category(category_id: int, updates: dict, db: Session) -> dict | None:
+    with _write_session_scope(db) as (session, _):
+        category = session.query(Category).filter(Category.id == category_id).first()
+        if category is None:
+            return None
+
+        if "name" in updates:
+            new_name = str(updates.get("name", "")).strip()
+            if not new_name:
+                raise ValueError("name is required")
+            duplicate = (
+                session.query(Category)
+                .filter(Category.name == new_name, Category.id != category_id)
+                .first()
+            )
+            if duplicate is not None:
+                raise ValueError("category already exists")
+            category.name = new_name
+
+        session.flush()
+        return _category_to_dict(category)
+
+
+def delete_category_hard(category_id: int, db: Session) -> dict | None:
+    with _write_session_scope(db) as (session, _):
+        category = session.query(Category).filter(Category.id == category_id).first()
+        if category is None:
+            return None
+        payload = _category_to_dict(category)
+        session.delete(category)
+        session.flush()
+        return payload
+
+
+def create_variant(payload: dict, db: Session) -> dict:
+    try:
+        product_id = int(payload.get("product_id"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("product_id is required") from exc
+    sku = str(payload.get("sku", "")).strip()
+    if not sku:
+        raise ValueError("sku is required")
+
+    try:
+        price = int(payload.get("price"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("price is required") from exc
+    try:
+        stock = int(payload.get("stock", 0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("stock must be greater than or equal to 0") from exc
+    if price < 0:
+        raise ValueError("price must be greater than or equal to 0")
+    if stock < 0:
+        raise ValueError("stock must be greater than or equal to 0")
+
+    with _write_session_scope(db) as (session, _):
+        product = session.query(Product).filter(Product.id == product_id).first()
+        if product is None:
+            raise ValueError("product not found")
+
+        existing = session.query(ProductVariant).filter(ProductVariant.sku == sku).first()
+        if existing is not None:
+            raise ValueError("variant sku already exists")
+
+        variant = ProductVariant(
+            product_id=product_id,
+            sku=sku,
+            size=None if payload.get("size") is None else str(payload.get("size")).strip() or None,
+            color=None if payload.get("color") is None else str(payload.get("color")).strip() or None,
+            price=price,
+            stock=stock,
+            is_active=bool(payload.get("active", True)),
+        )
+        session.add(variant)
+        session.flush()
+        return _variant_to_dict(variant)
+
+
+def update_variant(variant_id: int, updates: dict, db: Session) -> dict | None:
+    allowed_fields = {"product_id", "sku", "size", "color", "price", "stock", "active"}
+    with _write_session_scope(db) as (session, _):
+        variant = session.query(ProductVariant).filter(ProductVariant.id == variant_id).first()
+        if variant is None:
+            return None
+
+        for field, value in updates.items():
+            if field not in allowed_fields:
+                continue
+            if field == "product_id":
+                try:
+                    product_id = int(value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("product_id is required") from exc
+                product = session.query(Product).filter(Product.id == product_id).first()
+                if product is None:
+                    raise ValueError("product not found")
+                variant.product_id = product_id
+            elif field == "sku":
+                sku = str(value).strip()
+                if not sku:
+                    raise ValueError("sku is required")
+                duplicate = (
+                    session.query(ProductVariant)
+                    .filter(ProductVariant.sku == sku, ProductVariant.id != variant_id)
+                    .first()
+                )
+                if duplicate is not None:
+                    raise ValueError("variant sku already exists")
+                variant.sku = sku
+            elif field == "size":
+                variant.size = None if value is None else str(value).strip() or None
+            elif field == "color":
+                variant.color = None if value is None else str(value).strip() or None
+            elif field == "price":
+                try:
+                    price = int(value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("price is required") from exc
+                if price < 0:
+                    raise ValueError("price must be greater than or equal to 0")
+                variant.price = price
+            elif field == "stock":
+                try:
+                    stock = int(value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("stock must be greater than or equal to 0") from exc
+                if stock < 0:
+                    raise ValueError("stock must be greater than or equal to 0")
+                variant.stock = stock
+            elif field == "active":
+                variant.is_active = bool(value)
+
+        session.flush()
+        return _variant_to_dict(variant)
+
+
+def delete_variant_hard(variant_id: int, db: Session) -> dict | None:
+    with _write_session_scope(db) as (session, _):
+        variant = session.query(ProductVariant).filter(ProductVariant.id == variant_id).first()
+        if variant is None:
+            return None
+        payload = _variant_to_dict(variant)
+        session.delete(variant)
+        session.flush()
+        return payload
 
 
 def add_variant_stock(variant_id: int, quantity: int, db: Session) -> dict:

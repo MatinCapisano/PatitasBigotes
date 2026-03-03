@@ -321,7 +321,7 @@ def calculate_line_pricing(unit_price: int, quantity: int, discount: DiscountDTO
 def get_applicable_discounts_for_product(product: dict, discounts: Iterable[DiscountDTO]) -> list[DiscountDTO]:
     applicable: list[DiscountDTO] = []
     product_id = product.get("id")
-    category = product.get("category")
+    category_id = product.get("category_id")
 
     for discount in discounts:
         if not is_discount_currently_valid(discount):
@@ -332,7 +332,7 @@ def get_applicable_discounts_for_product(product: dict, discounts: Iterable[Disc
 
         if scope == "all":
             applicable.append(discount)
-        elif scope == "category" and str(scope_value) == str(category):
+        elif scope == "category" and str(scope_value) == str(category_id):
             applicable.append(discount)
         elif scope == "product" and str(scope_value) == str(product_id):
             applicable.append(discount)
