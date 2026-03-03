@@ -19,7 +19,6 @@ from source.services.orders_s import (
     get_order_reservations_for_user,
     get_or_create_draft_order,
     get_order_for_user,
-    pay_order,
     remove_item_from_draft_order,
 )
 from source.services.anti_abuse_s import enforce_public_guest_checkout_limits
@@ -182,16 +181,42 @@ def get_order(
 def pay_order_endpoint(
     order_id: int,
     payload: PayOrderRequest,
-    current_user: dict = Depends(get_current_user),
+    admin_user: dict = Depends(require_admin),
     db: Session = Depends(get_db_transactional),
 ):
-    user_id = get_current_user_id(current_user)
+    admin_user_id = get_current_user_id(admin_user)
     try:
-        order = pay_order(
-            user_id=user_id,
+        order = change_order_status(
+            user_id=admin_user_id,
             order_id=order_id,
+            new_status="paid",
+            is_admin=True,
             payment_ref=payload.payment_ref,
-            paid_amount=payload.paid_amount,
+            paid_amount=int(payload.paid_amount),
+            db=db,
+        )
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+
+    return {"data": order}
+
+
+@router.post("/admin/orders/{order_id}/pay/manual")
+def admin_manual_pay_order_endpoint(
+    order_id: int,
+    payload: PayOrderRequest,
+    admin_user: dict = Depends(require_admin),
+    db: Session = Depends(get_db_transactional),
+):
+    admin_user_id = get_current_user_id(admin_user)
+    try:
+        order = change_order_status(
+            user_id=admin_user_id,
+            order_id=order_id,
+            new_status="paid",
+            is_admin=True,
+            payment_ref=payload.payment_ref,
+            paid_amount=int(payload.paid_amount),
             db=db,
         )
     except Exception as exc:
