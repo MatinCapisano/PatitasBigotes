@@ -230,6 +230,16 @@ a {
   margin-bottom: 0.8rem;
 }
 
+.price-original {
+  color: #64748b;
+  text-decoration: line-through;
+  font-weight: 500;
+}
+
+.price-final {
+  color: #166534;
+}
+
 .warning {
   color: #b45309;
   font-weight: 700;
@@ -302,6 +312,12 @@ a {
   display: flex;
   flex-wrap: wrap;
   gap: 0.6rem;
+}
+
+.detail-option-price {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .chip {

@@ -6,6 +6,9 @@ export type StorefrontProduct = {
   category_id: number;
   category_name: string | null;
   min_var_price: number | null;
+  min_var_price_original?: number | null;
+  min_var_price_final?: number | null;
+  has_discount?: boolean;
   in_stock: boolean;
 };
 
@@ -17,6 +20,9 @@ export type StorefrontOption = {
   img_url: string | null;
   effective_img_url?: string | null;
   price: number;
+  price_original?: number;
+  price_final?: number;
+  has_discount?: boolean;
   in_stock: boolean;
 };
 

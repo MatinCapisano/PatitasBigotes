@@ -102,7 +102,14 @@ export function ProductDetailPage() {
                 onClick={() => setSelectedVariantId(option.variant_id)}
               >
                 <span>{option.label}</span>
-                <strong>{formatArs(option.price)}</strong>
+                {option.has_discount && option.price_original !== undefined ? (
+                  <span className="detail-option-price">
+                    <span className="price-original">{formatArs(option.price_original)}</span>
+                    <strong className="price-final">{formatArs(option.price_final ?? option.price)}</strong>
+                  </span>
+                ) : (
+                  <strong>{formatArs(option.price_final ?? option.price)}</strong>
+                )}
               </button>
             ))}
           </div>

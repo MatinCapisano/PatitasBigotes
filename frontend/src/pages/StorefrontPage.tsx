@@ -161,7 +161,14 @@ export function StorefrontPage() {
             <p className="category">{product.category_name ?? "Sin categoria"}</p>
             <h2>{product.name}</h2>
             <p>{product.description ?? "Sin descripcion"}</p>
-            <p className="price">{formatArs(product.min_var_price)}</p>
+            {product.has_discount && product.min_var_price_original !== null && product.min_var_price_original !== undefined ? (
+              <p className="price">
+                <span className="price-original">{formatArs(product.min_var_price_original)}</span>{" "}
+                <span className="price-final">{formatArs(product.min_var_price_final ?? product.min_var_price)}</span>
+              </p>
+            ) : (
+              <p className="price">{formatArs(product.min_var_price_final ?? product.min_var_price)}</p>
+            )}
             {!product.in_stock && <p className="warning">Sin stock por ahora</p>}
             <Link className="btn btn-small" to={`/products/${product.id}`}>
               Ver detalle
