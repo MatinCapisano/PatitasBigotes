@@ -3,7 +3,7 @@ param(
     [switch]$SkipVenv,
     [switch]$SkipInstall,
     [switch]$SkipInitDb,
-    [switch]$SkipInstallJobs,
+    [switch]$EnableJobs,
     [switch]$ForceJobs
 )
 
@@ -73,7 +73,7 @@ if (-not $SkipInitDb) {
     }
 }
 
-if (-not $SkipInstallJobs) {
+if ($EnableJobs) {
     if (-not (Test-Path $installJobsScript)) {
         throw "Missing jobs installer script: $installJobsScript"
     }
@@ -84,6 +84,9 @@ if (-not $SkipInstallJobs) {
     else {
         & powershell -NoProfile -ExecutionPolicy Bypass -File $installJobsScript
     }
+}
+else {
+    Write-Step 'Skipping scheduled jobs (use -EnableJobs to install)'
 }
 
 Write-Step 'Bootstrap completed'

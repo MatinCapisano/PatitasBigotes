@@ -11,6 +11,58 @@
 7. For auth emails, configure SMTP (`SMTP_*`) and `MAIL_FROM`.
 8. Set `APP_BASE_URL` so verification/reset links point to your frontend.
 
+## -JOBS-
+
+Automatizacion de jobs de backend via Programador de tareas de Windows.
+
+Comando unico:
+
+```powershell
+.\backend\scripts\jobs.ps1 <status|enable|disable|reinstall>
+```
+
+Comandos principales:
+
+1. Ver estado:
+
+```powershell
+.\backend\scripts\jobs.ps1 status
+```
+
+2. Activar automatizacion:
+
+```powershell
+.\backend\scripts\jobs.ps1 enable
+```
+
+3. Desactivar automatizacion:
+
+```powershell
+.\backend\scripts\jobs.ps1 disable
+```
+
+Estado global:
+
+1. `AUTOMATIZACION: ACTIVADA`: todas las tareas `PatitasBigotes_*` existen y no estan en `Disabled`.
+2. `AUTOMATIZACION: DESACTIVADA`: falta alguna tarea o alguna esta en `Disabled`.
+
+Jobs administrados:
+
+1. `PatitasBigotes_WebhookReprocess` (cada 10 minutos)
+2. `PatitasBigotes_PaymentsReconcile` (cada 4 horas)
+3. `PatitasBigotes_ExpireStockReservations` (cada 15 minutos)
+4. `PatitasBigotes_PruneAuthActionTokens` (diario)
+5. `PatitasBigotes_PruneAuthLoginThrottles` (diario)
+
+Notas de bootstrap:
+
+1. `backend/scripts/bootstrap.ps1` ya no activa jobs automaticamente por default.
+2. Para bootstrap + jobs en un paso:
+
+```powershell
+.\backend\scripts\bootstrap.ps1 -EnableJobs
+```
+
 ## Initialize database tables
 
 Run from `backend/`:
