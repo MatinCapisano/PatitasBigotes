@@ -23,6 +23,8 @@ from source.services.orders_s import (
     get_order_reservations_for_user,
     get_or_create_draft_order,
     get_order_for_user,
+    list_orders_for_admin,
+    list_orders_for_user,
     remove_item_from_draft_order,
 )
 from source.services.anti_abuse_s import enforce_public_guest_checkout_limits
@@ -252,6 +254,19 @@ def get_order(
     return {"data": order}
 
 
+@router.get("/orders")
+def list_orders(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db_transactional),
+):
+    user_id = get_current_user_id(current_user)
+    try:
+        orders = list_orders_for_user(user_id=user_id, db=db)
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+    return {"data": orders}
+
+
 @router.get("/admin/orders/{order_id}")
 def get_order_admin(
     order_id: int,
@@ -265,6 +280,28 @@ def get_order_admin(
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found")
     return {"data": order}
+
+
+@router.get("/admin/orders")
+def list_orders_admin(
+    status: str | None = None,
+    limit: int = 10,
+    sort_by: str = "created_at",
+    sort_dir: str = "desc",
+    _: dict = Depends(require_admin),
+    db: Session = Depends(get_db_transactional),
+):
+    try:
+        rows = list_orders_for_admin(
+            status=status,
+            limit=limit,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            db=db,
+        )
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+    return {"data": rows}
 
 
 @router.post("/admin/orders/{order_id}/pay/manual")

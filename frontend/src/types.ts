@@ -50,3 +50,23 @@ export type MyProfile = {
   email_verified_at: string | null;
   created_at: string;
 };
+
+export type MyOrderItem = {
+  id: number;
+  product_id: number;
+  variant_id: number;
+  product_name: string | null;
+  variant_label: string;
+  quantity: number;
+  unit_price: number;
+  line_total: number;
+};
+
+export type MyOrder = {
+  id: number;
+  status: "draft" | "submitted" | "paid" | "cancelled";
+  currency: string;
+  total_amount: number;
+  created_at: string;
+  items: MyOrderItem[];
+};

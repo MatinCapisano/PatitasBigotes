@@ -7,6 +7,7 @@ from source.errors import raise_http_error_from_exception
 from source.services.payment_s import (
     get_payment_for_user,
     get_payment_public_status,
+    list_payments_for_admin,
     list_pending_bank_transfer_payments_for_admin,
 )
 
@@ -64,3 +65,25 @@ def list_pending_bank_transfer_payments(
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
     return {"data": payments}
+
+
+@router.get("/admin/payments")
+def list_admin_payments(
+    status: str | None = None,
+    limit: int = 10,
+    sort_by: str = "created_at",
+    sort_dir: str = "desc",
+    _: dict = Depends(require_admin),
+    db: Session = Depends(get_db_transactional),
+):
+    try:
+        rows = list_payments_for_admin(
+            status=status,
+            limit=limit,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            db=db,
+        )
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+    return {"data": rows}

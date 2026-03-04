@@ -1369,3 +1369,40 @@ def list_pending_bank_transfer_payments_for_admin(
         result.append(item)
     return result
 
+
+def list_payments_for_admin(
+    *,
+    status: str | None,
+    limit: int,
+    sort_by: str,
+    sort_dir: str,
+    db: Session,
+) -> list[dict]:
+    safe_limit = max(1, min(int(limit), 500))
+    query = db.query(Payment).join(Order, Payment.order_id == Order.id).options(joinedload(Payment.order))
+    if status is not None:
+        normalized_status = status.strip().lower()
+        if normalized_status not in {"pending", "paid", "cancelled", "expired"}:
+            raise ValueError("invalid status")
+        query = query.filter(Payment.status == normalized_status)
+
+    if sort_by not in {"created_at", "id"}:
+        raise ValueError("invalid sort_by")
+    if sort_dir not in {"asc", "desc"}:
+        raise ValueError("invalid sort_dir")
+    sort_column = Payment.created_at if sort_by == "created_at" else Payment.id
+    if sort_dir == "asc":
+        query = query.order_by(sort_column.asc(), Payment.id.asc())
+    else:
+        query = query.order_by(sort_column.desc(), Payment.id.desc())
+
+    rows = query.limit(safe_limit).all()
+    result: list[dict] = []
+    for payment in rows:
+        item = _payment_to_dict(payment)
+        order = payment.order
+        item["order_status"] = order.status if order is not None else None
+        item["user_id"] = int(order.user_id) if order is not None else None
+        result.append(item)
+    return result
+

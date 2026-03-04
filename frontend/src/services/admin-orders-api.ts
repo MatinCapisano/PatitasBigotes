@@ -48,6 +48,8 @@ export type AdminPayment = {
   external_ref: string | null;
   receipt_url: string | null;
   preference_id: string | null;
+  order_status?: "draft" | "submitted" | "paid" | "cancelled" | null;
+  user_id?: number | null;
   created_at: string;
   paid_at: string | null;
 };
@@ -67,6 +69,36 @@ export async function getAdminOrder(orderId: number): Promise<AdminOrder> {
 
 export async function listAdminOrderPayments(orderId: number): Promise<AdminPayment[]> {
   const response = await http.get<{ data: AdminPayment[] }>(`/admin/orders/${orderId}/payments`);
+  return response.data.data;
+}
+
+export async function listAdminOrders(params?: {
+  status?: "draft" | "submitted" | "paid" | "cancelled";
+  limit?: number;
+  sort_by?: "created_at" | "id";
+  sort_dir?: "asc" | "desc";
+}): Promise<AdminOrder[]> {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.sort_by) qs.set("sort_by", params.sort_by);
+  if (params?.sort_dir) qs.set("sort_dir", params.sort_dir);
+  const response = await http.get<{ data: AdminOrder[] }>(`/admin/orders?${qs.toString()}`);
+  return response.data.data;
+}
+
+export async function listAdminPayments(params?: {
+  status?: "pending" | "paid" | "cancelled" | "expired";
+  limit?: number;
+  sort_by?: "created_at" | "id";
+  sort_dir?: "asc" | "desc";
+}): Promise<AdminPayment[]> {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.sort_by) qs.set("sort_by", params.sort_by);
+  if (params?.sort_dir) qs.set("sort_dir", params.sort_dir);
+  const response = await http.get<{ data: AdminPayment[] }>(`/admin/payments?${qs.toString()}`);
   return response.data.data;
 }
 

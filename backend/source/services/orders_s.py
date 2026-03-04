@@ -254,11 +254,52 @@ def get_order_for_user(user_id: int, order_id: int, db: Session) -> dict | None:
     return _order_to_dict(order)
 
 
+def list_orders_for_user(user_id: int, db: Session) -> list[dict]:
+    orders = (
+        _order_query(db)
+        .filter(Order.user_id == user_id)
+        .order_by(Order.created_at.desc(), Order.id.desc())
+        .all()
+    )
+    return [_order_to_dict(order) for order in orders]
+
+
 def get_order_for_admin(order_id: int, db: Session) -> dict | None:
     order = _order_query(db).filter(Order.id == order_id).first()
     if order is None:
         return None
     return _order_to_dict(order)
+
+
+def list_orders_for_admin(
+    *,
+    status: str | None,
+    limit: int,
+    sort_by: str,
+    sort_dir: str,
+    db: Session,
+) -> list[dict]:
+    safe_limit = max(1, min(int(limit), 500))
+    query = _order_query(db)
+    if status is not None:
+        normalized_status = status.strip().lower()
+        if normalized_status not in ALLOWED_ORDER_STATUS:
+            raise ValueError("invalid status")
+        query = query.filter(Order.status == normalized_status)
+
+    if sort_by not in {"created_at", "id"}:
+        raise ValueError("invalid sort_by")
+    if sort_dir not in {"asc", "desc"}:
+        raise ValueError("invalid sort_dir")
+
+    sort_column = Order.created_at if sort_by == "created_at" else Order.id
+    if sort_dir == "asc":
+        query = query.order_by(sort_column.asc(), Order.id.asc())
+    else:
+        query = query.order_by(sort_column.desc(), Order.id.desc())
+
+    rows = query.limit(safe_limit).all()
+    return [_order_to_dict(order) for order in rows]
 
 
 def add_item_to_draft_order(

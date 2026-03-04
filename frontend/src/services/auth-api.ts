@@ -1,5 +1,5 @@
 import { http } from "./http";
-import type { ApiEnvelope, LoginResponse, MyProfile } from "../types";
+import type { ApiEnvelope, LoginResponse, MyOrder, MyProfile } from "../types";
 
 export async function login(email: string, password: string) {
   const response = await http.post<ApiEnvelope<LoginResponse>>("/auth/login", {
@@ -25,4 +25,9 @@ export async function updateMyProfile(payload: {
     data: response.data.data,
     meta: response.data.meta ?? {}
   };
+}
+
+export async function getMyOrders() {
+  const response = await http.get<ApiEnvelope<MyOrder[]>>("/orders");
+  return response.data.data;
 }

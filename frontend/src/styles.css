@@ -128,6 +128,13 @@ a {
   gap: 0.6rem;
 }
 
+.search-row label {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 180px;
+  font-size: 0.9rem;
+}
+
 .categories-inline {
   margin-top: 1rem;
   display: flex;
@@ -324,6 +331,22 @@ a {
   max-width: 480px;
 }
 
+.account-menu {
+  margin: 0.8rem 0 1rem;
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.profile-orders {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.profile-order-items {
+  margin-top: 0.55rem;
+}
+
 .auth-form {
   display: grid;
   gap: 0.8rem;
@@ -390,6 +413,42 @@ a {
   justify-content: space-between;
   gap: 0.8rem;
   align-items: flex-start;
+  position: relative;
+}
+
+.admin-expand-btn {
+  border: 1px solid #d7c2af;
+  background: #fff7f1;
+  color: #6b4e3d;
+  border-radius: 10px;
+  width: 34px;
+  height: 34px;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.admin-product-summary {
+  flex: 1;
+}
+
+.admin-product-menu-wrap {
+  position: relative;
+}
+
+.admin-product-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  z-index: 3;
+  display: grid;
+  gap: 0.35rem;
+  min-width: 140px;
+  padding: 0.45rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
 }
 
 .admin-product-actions {
@@ -444,6 +503,46 @@ a {
   display: flex;
   align-items: end;
   gap: 0.45rem;
+}
+
+.admin-scroll-list {
+  margin-top: 0.7rem;
+  max-height: 420px;
+  overflow: auto;
+  display: grid;
+  gap: 0.45rem;
+  padding-right: 0.3rem;
+}
+
+.admin-discount-picker-wrap {
+  margin-top: 0.7rem;
+  border-top: 1px solid #ececec;
+  padding-top: 0.7rem;
+}
+
+.admin-discount-picker-list {
+  margin-top: 0.55rem;
+  display: grid;
+  gap: 0.6rem;
+  max-height: 380px;
+  overflow: auto;
+  padding-right: 0.25rem;
+}
+
+.admin-discount-product-check {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  cursor: pointer;
+}
+
+.admin-discount-variant-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  border-top: 1px solid #f1f5f9;
+  cursor: pointer;
 }
 
 .btn-danger {
