@@ -1,3 +1,5 @@
+import { contactInfo } from "../features/contact";
+
 export function ContactPage() {
   return (
     <section>
@@ -5,13 +7,13 @@ export function ContactPage() {
       <p className="page-subtitle">Escribinos para compras, seguimiento de pedidos y consultas.</p>
       <div className="card">
         <p>
-          <strong>WhatsApp:</strong> +54 9 11 0000-0000
+          <strong>WhatsApp:</strong> {contactInfo.whatsapp}
         </p>
         <p>
-          <strong>Email:</strong> contacto@patitasybigotes.com
+          <strong>Email:</strong> {contactInfo.email}
         </p>
         <p>
-          <strong>Horario:</strong> Lunes a Viernes, 13:00 a 20:00
+          <strong>Horario:</strong> {contactInfo.hours}
         </p>
       </div>
     </section>

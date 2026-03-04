@@ -1,0 +1,1 @@
+export { contactInfo } from "./data";

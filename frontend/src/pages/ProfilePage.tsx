@@ -1,99 +1,7 @@
-import { FormEvent, useEffect, useState } from "react";
-import type { MyOrder, MyProfile } from "../types";
-import { getMyOrders, getMyProfile, updateMyProfile } from "../services/auth-api";
+import { useProfilePage } from "../features/profile";
 
 export function ProfilePage() {
-  const [section, setSection] = useState<"summary" | "history" | "edit">("summary");
-  const [profile, setProfile] = useState<MyProfile | null>(null);
-  const [orders, setOrders] = useState<MyOrder[]>([]);
-  const [ordersLoading, setOrdersLoading] = useState(false);
-  const [ordersError, setOrdersError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-  const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
-
-  async function loadProfile() {
-    setLoading(true);
-    setError("");
-    try {
-      const data = await getMyProfile();
-      setProfile(data);
-      setFirstName(data.first_name || "");
-      setLastName(data.last_name || "");
-      setPhone(data.phone || "");
-      setEmail(data.email || "");
-    } catch {
-      setError("No se pudo cargar tu perfil.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void loadProfile();
-  }, []);
-
-  useEffect(() => {
-    async function loadOrders() {
-      if (section !== "history") return;
-      setOrdersLoading(true);
-      setOrdersError("");
-      try {
-        const data = await getMyOrders();
-        setOrders(data);
-      } catch {
-        setOrdersError("No se pudo cargar tu historial de compras.");
-      } finally {
-        setOrdersLoading(false);
-      }
-    }
-    void loadOrders();
-  }, [section]);
-
-  async function onSubmit(event: FormEvent) {
-    event.preventDefault();
-    if (!profile) return;
-    setSaving(true);
-    setError("");
-    setSuccess("");
-    try {
-      const previousEmail = profile.email;
-      const result = await updateMyProfile({
-        first_name: firstName.trim(),
-        last_name: lastName.trim(),
-        phone: phone.trim(),
-        email: email.trim()
-      });
-      setProfile(result.data);
-      const verificationSent = Boolean((result.meta as Record<string, unknown>).verification_email_sent);
-      if (verificationSent && previousEmail.trim().toLowerCase() !== email.trim().toLowerCase()) {
-        setSuccess("Perfil actualizado. Como cambiaste el email, te enviamos una verificacion a tu nuevo correo.");
-      } else {
-        setSuccess("Perfil actualizado.");
-      }
-    } catch (apiError: unknown) {
-      const detail =
-        typeof apiError === "object" &&
-        apiError !== null &&
-        "response" in apiError &&
-        typeof apiError.response === "object" &&
-        apiError.response !== null &&
-        "data" in apiError.response &&
-        typeof apiError.response.data === "object" &&
-        apiError.response.data !== null &&
-        "detail" in apiError.response.data
-          ? String(apiError.response.data.detail)
-          : "No se pudo actualizar el perfil.";
-      setError(detail);
-    } finally {
-      setSaving(false);
-    }
-  }
+  const profilePage = useProfilePage();
 
   return (
     <section>
@@ -101,90 +9,90 @@ export function ProfilePage() {
       <p className="page-subtitle">Administra tu cuenta desde el menu.</p>
       <div className="account-menu">
         <button
-          className={`btn btn-small ${section === "summary" ? "" : "btn-ghost"}`}
+          className={`btn btn-small ${profilePage.section === "summary" ? "" : "btn-ghost"}`}
           type="button"
-          onClick={() => setSection("summary")}
+          onClick={() => profilePage.setSection("summary")}
         >
           Resumen
         </button>
         <button
-          className={`btn btn-small ${section === "history" ? "" : "btn-ghost"}`}
+          className={`btn btn-small ${profilePage.section === "history" ? "" : "btn-ghost"}`}
           type="button"
-          onClick={() => setSection("history")}
+          onClick={() => profilePage.setSection("history")}
         >
           Historial de compras
         </button>
         <button
-          className={`btn btn-small ${section === "edit" ? "" : "btn-ghost"}`}
+          className={`btn btn-small ${profilePage.section === "edit" ? "" : "btn-ghost"}`}
           type="button"
-          onClick={() => setSection("edit")}
+          onClick={() => profilePage.setSection("edit")}
         >
           Editar perfil
         </button>
       </div>
-      {loading ? (
+      {profilePage.loading ? (
         <p>Cargando perfil...</p>
       ) : (
         <>
-          {section === "summary" && profile && (
+          {profilePage.section === "summary" && profilePage.profile && (
             <article className="card auth-wrap">
-              <p><strong>Nombre:</strong> {profile.first_name} {profile.last_name}</p>
-              <p><strong>Email:</strong> {profile.email}</p>
-              <p><strong>Telefono:</strong> {profile.phone || "-"}</p>
+              <p><strong>Nombre:</strong> {profilePage.profile.first_name} {profilePage.profile.last_name}</p>
+              <p><strong>Email:</strong> {profilePage.profile.email}</p>
+              <p><strong>Telefono:</strong> {profilePage.profile.phone || "-"}</p>
               <p className="muted">
-                Estado email: {profile.email_verified ? "Verificado" : "No verificado"}
+                Estado email: {profilePage.profile.email_verified ? "Verificado" : "No verificado"}
               </p>
               <div className="checkout-actions">
-                <button className="btn btn-small" type="button" onClick={() => setSection("edit")}>
+                <button className="btn btn-small" type="button" onClick={() => profilePage.setSection("edit")}>
                   Ir a editar perfil
                 </button>
               </div>
             </article>
           )}
 
-          {section === "edit" && (
+          {profilePage.section === "edit" && (
             <article className="card auth-wrap">
-              {profile && (
+              {profilePage.profile && (
                 <p className="muted">
-                  Estado email: {profile.email_verified ? "Verificado" : "No verificado"}
+                  Estado email: {profilePage.profile.email_verified ? "Verificado" : "No verificado"}
                 </p>
               )}
-              <form className="auth-form" onSubmit={onSubmit}>
+              <form className="auth-form" onSubmit={profilePage.onSubmit}>
                 <label>
                   Nombre
-                  <input className="input" value={firstName} onChange={(event) => setFirstName(event.target.value)} required />
+                  <input className="input" value={profilePage.firstName} onChange={(event) => profilePage.setFirstName(event.target.value)} required />
                 </label>
                 <label>
                   Apellido
-                  <input className="input" value={lastName} onChange={(event) => setLastName(event.target.value)} required />
+                  <input className="input" value={profilePage.lastName} onChange={(event) => profilePage.setLastName(event.target.value)} required />
                 </label>
                 <label>
                   Telefono
-                  <input className="input" value={phone} onChange={(event) => setPhone(event.target.value)} required />
+                  <input className="input" value={profilePage.phone} onChange={(event) => profilePage.setPhone(event.target.value)} required />
                 </label>
                 <label>
                   Email
-                  <input className="input" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+                  <input className="input" type="email" value={profilePage.email} onChange={(event) => profilePage.setEmail(event.target.value)} required />
                 </label>
-                <button className="btn" type="submit" disabled={saving}>
-                  {saving ? "Guardando..." : "Guardar cambios"}
+                <button className="btn" type="submit" disabled={profilePage.saving}>
+                  {profilePage.saving ? "Guardando..." : "Guardar cambios"}
                 </button>
               </form>
-              {error && <p className="error">{error}</p>}
-              {success && <p className="success">{success}</p>}
+              {profilePage.error && <p className="error">{profilePage.error}</p>}
+              {profilePage.success && <p className="success">{profilePage.success}</p>}
             </article>
           )}
 
-          {section === "history" && (
+          {profilePage.section === "history" && (
             <div className="profile-orders">
-              {ordersLoading && <p>Cargando historial...</p>}
-              {ordersError && <p className="error">{ordersError}</p>}
-              {!ordersLoading && !ordersError && orders.length === 0 && (
+              {profilePage.ordersLoading && <p>Cargando historial...</p>}
+              {profilePage.ordersError && <p className="error">{profilePage.ordersError}</p>}
+              {!profilePage.ordersLoading && !profilePage.ordersError && profilePage.orders.length === 0 && (
                 <article className="card auth-wrap">
                   <p className="muted">Todavia no tenes compras registradas.</p>
                 </article>
               )}
-              {!ordersLoading && !ordersError && orders.map((order) => (
+              {!profilePage.ordersLoading && !profilePage.ordersError && profilePage.orders.map((order) => (
                 <article className="card" key={order.id}>
                   <p><strong>Orden #{order.id}</strong> - {order.status}</p>
                   <p className="muted">Total: ${(order.total_amount / 100).toLocaleString("es-AR")} {order.currency}</p>

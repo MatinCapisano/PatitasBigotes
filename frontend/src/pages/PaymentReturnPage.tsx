@@ -1,8 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
-import { fetchPublicPaymentStatus, type PublicPaymentStatus } from "../services/payments-api";
-
-type PaymentReturnVariant = "success" | "failure" | "pending";
+import { Link } from "react-router-dom";
+import { type PaymentReturnVariant, usePaymentReturnStatus } from "../features/checkout";
 
 const CONTENT: Record<PaymentReturnVariant, { title: string; subtitle: string }> = {
   success: {
@@ -20,40 +17,8 @@ const CONTENT: Record<PaymentReturnVariant, { title: string; subtitle: string }>
 };
 
 export function PaymentReturnPage({ variant }: { variant: PaymentReturnVariant }) {
-  const location = useLocation();
+  const { location, status, loading, error, loadStatus } = usePaymentReturnStatus();
   const { title, subtitle } = CONTENT[variant];
-  const [status, setStatus] = useState<PublicPaymentStatus | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const params = useMemo(() => new URLSearchParams(location.search), [location.search]);
-  const lookup = useMemo(
-    () => ({
-      externalRef: params.get("external_reference") || params.get("external_ref"),
-      preferenceId: params.get("preference_id")
-    }),
-    [params]
-  );
-
-  async function loadStatus() {
-    if (!lookup.externalRef && !lookup.preferenceId) {
-      return;
-    }
-    setLoading(true);
-    setError("");
-    try {
-      const payment = await fetchPublicPaymentStatus(lookup);
-      setStatus(payment);
-    } catch {
-      setError("No se pudo consultar el estado actualizado del pago.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void loadStatus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lookup.externalRef, lookup.preferenceId]);
 
   return (
     <section>

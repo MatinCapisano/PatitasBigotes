@@ -17,7 +17,7 @@ export function Layout() {
             <span className="brand-main">Bigotes</span>
           </Link>
           <nav className="nav">
-            <Link to="/">Tienda</Link>
+            <Link to="/home">Tienda</Link>
             <Link to="/checkout">Carrito ({currentCartCount})</Link>
             {isAuthenticated && <Link to="/profile">Mi cuenta</Link>}
             {!isAuthenticated ? (
