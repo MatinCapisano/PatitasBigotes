@@ -72,7 +72,7 @@ function readApiErrorMessage(apiError: unknown): string {
 }
 
 export function CheckoutPage() {
-  const { isAuthenticated } = useAuth();
+  const { isLoading: authLoading, isAuthenticated } = useAuth();
   const items = readCart();
   const total = items.reduce((sum, item) => sum + item.unit_price * item.quantity, 0);
   const [guestFirstName, setGuestFirstName] = useState("");
@@ -85,7 +85,7 @@ export function CheckoutPage() {
   const [success, setSuccess] = useState("");
 
   async function onFinalizeCheckout() {
-    if (items.length === 0 || loading) return;
+    if (items.length === 0 || loading || authLoading) return;
     setLoading(true);
     setError("");
     setSuccess("");
@@ -124,8 +124,11 @@ export function CheckoutPage() {
   return (
     <section>
       <h1 className="page-title">Finalizar compra</h1>
+      {authLoading && <p className="muted">Verificando sesion...</p>}
       <p className="page-subtitle">
-        {isAuthenticated
+        {authLoading
+          ? "Estamos validando tu sesion antes de continuar."
+          : isAuthenticated
           ? "Checkout de cuenta: se crea orden del usuario y se envia a submitted."
           : "Checkout invitado: completa tus datos para enviar la orden."}
       </p>
@@ -163,7 +166,7 @@ export function CheckoutPage() {
                 <option value="cash">Efectivo</option>
               </select>
             </label>
-            {!isAuthenticated && (
+            {!authLoading && !isAuthenticated && (
               <div className="checkout-guest-grid">
                 <label>
                   Nombre
@@ -188,7 +191,7 @@ export function CheckoutPage() {
                 className="btn"
                 type="button"
                 onClick={() => void onFinalizeCheckout()}
-                disabled={loading}
+                disabled={loading || authLoading}
               >
                 {loading ? "Procesando..." : "Finalizar compra"}
               </button>

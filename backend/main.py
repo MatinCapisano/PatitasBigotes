@@ -1,9 +1,10 @@
 import logging
-import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from source.db.init_db import init_db
+from source.db.config import get_cors_allow_origins
+from source.dependencies.csrf_d import CSRFMiddleware
 from source.routes.auth_r import router as auth_router
 from source.routes.discounts_r import router as discounts_router
 from source.routes.mercadopago_r import router as mercadopago_router
@@ -22,8 +23,7 @@ app = FastAPI(
 )
 logger = logging.getLogger(__name__)
 
-raw_origins = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
-allowed_origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+allowed_origins = get_cors_allow_origins()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -31,6 +31,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(CSRFMiddleware)
 
 app.include_router(products_router)
 app.include_router(mercadopago_router)

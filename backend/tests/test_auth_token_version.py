@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 
 from fastapi import HTTPException
-from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from starlette.requests import Request
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
@@ -65,8 +65,17 @@ class AuthTokenVersionTests(unittest.TestCase):
         db.flush()
         return user
 
-    def _bearer(self, token: str) -> HTTPAuthorizationCredentials:
-        return HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+    def _request_with_access_cookie(self, token: str) -> Request:
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/auth/me",
+            "headers": [
+                (b"cookie", f"pb_at={token}".encode("utf-8")),
+            ],
+            "client": ("127.0.0.1", 12345),
+        }
+        return Request(scope)
 
     def test_issue_token_pair_includes_tv_claim(self) -> None:
         db = self.TestSession()
@@ -84,7 +93,7 @@ class AuthTokenVersionTests(unittest.TestCase):
             user = self._create_user(db)
             legacy_access = create_access_token({"sub": str(user.id), "is_admin": False})
             with self.assertRaises(HTTPException) as ctx:
-                get_current_user(credentials=self._bearer(legacy_access), db=db)
+                get_current_user(request=self._request_with_access_cookie(legacy_access), db=db)
             self.assertEqual(ctx.exception.status_code, 401)
             self.assertEqual(ctx.exception.detail, "Invalid or expired token")
         finally:
@@ -104,10 +113,10 @@ class AuthTokenVersionTests(unittest.TestCase):
             self.assertEqual(decode_access_token(refreshed["access_token"]).get("tv"), 2)
 
             with self.assertRaises(HTTPException) as old_ctx:
-                get_current_user(credentials=self._bearer(old_access), db=db)
+                get_current_user(request=self._request_with_access_cookie(old_access), db=db)
             self.assertEqual(old_ctx.exception.status_code, 401)
 
-            payload = get_current_user(credentials=self._bearer(refreshed["access_token"]), db=db)
+            payload = get_current_user(request=self._request_with_access_cookie(refreshed["access_token"]), db=db)
             self.assertEqual(payload.get("sub"), str(user.id))
         finally:
             db.close()

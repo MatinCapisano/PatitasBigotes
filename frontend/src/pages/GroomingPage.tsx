@@ -14,7 +14,7 @@ const DAYS = [
 const DOG_SIZES = ["Pequeno", "Mediano", "Grande"] as const;
 
 export function GroomingPage() {
-  const { isAuthenticated } = useAuth();
+  const { isLoading: authLoading, isAuthenticated } = useAuth();
   const [day, setDay] = useState<(typeof DAYS)[number]>("Lunes");
   const [dogSize, setDogSize] = useState<(typeof DOG_SIZES)[number]>("Mediano");
   const [hourText, setHourText] = useState("");
@@ -24,7 +24,7 @@ export function GroomingPage() {
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!isAuthenticated) return;
+    if (authLoading || !isAuthenticated) return;
     setLoading(true);
     setError("");
     setSuccess("");
@@ -52,7 +52,9 @@ export function GroomingPage() {
       </p>
       <div className="card">
         <h2>Pedir turno</h2>
-        {!isAuthenticated ? (
+        {authLoading ? (
+          <p className="muted">Verificando sesion...</p>
+        ) : !isAuthenticated ? (
           <div>
             <p>Para pedir turno tenes que iniciar sesion.</p>
             <Link className="btn btn-small" to="/login">

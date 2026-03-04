@@ -1,26 +1,25 @@
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from auth.security import decode_access_token, parsear_sub_a_user_id
 from source.db.models import User
 from source.db.session import get_db
-
-bearer_scheme = HTTPBearer(auto_error=False)
+from source.services.auth_cookies_s import get_access_token_from_request
 
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    request: Request,
     db: Session = Depends(get_db),
 ) -> dict:
-    if credentials is None:
+    access_token = get_access_token_from_request(request)
+    if not access_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing bearer token",
+            detail="Missing access token cookie",
         )
 
     try:
-        payload = decode_access_token(credentials.credentials)
+        payload = decode_access_token(access_token)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

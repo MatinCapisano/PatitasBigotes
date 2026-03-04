@@ -1,8 +1,7 @@
 ﻿import logging
 from datetime import datetime, timedelta, UTC
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.security import HTTPAuthorizationCredentials
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from auth.auth_s import (
@@ -12,10 +11,9 @@ from auth.auth_s import (
     refresh_with_token,
     set_user_password_and_invalidate_sessions,
 )
-from auth.security import ensure_password_policy, verify_password
+from auth.security import ensure_password_policy, obtener_config_jwt, verify_password
 from source.db.config import get_app_base_url
 from source.db.models import User
-from source.dependencies.auth_d import bearer_scheme
 from source.dependencies.auth_d import get_current_user, get_current_user_id
 from source.db.session import get_db_transactional
 from source.errors import raise_http_error_from_exception
@@ -45,6 +43,11 @@ from source.services.auth_tokens_s import (
     consume_one_time_token,
     create_one_time_token,
 )
+from source.services.auth_cookies_s import (
+    clear_auth_cookies,
+    get_refresh_token_from_request,
+    set_auth_cookies,
+)
 from source.services.email_s import send_email_verification, send_password_reset
 from source.services.users_s import create_auth_user
 
@@ -67,6 +70,7 @@ def _extract_client_ip(request: Request) -> str:
 def login(
     payload: LoginRequest,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db_transactional),
 ):
     client_ip = _extract_client_ip(request)
@@ -106,41 +110,74 @@ def login(
         )
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
+    settings = obtener_config_jwt()
+    set_auth_cookies(
+        response=response,
+        access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
+        access_max_age_seconds=int(tokens["access_expires_in_seconds"]),
+        refresh_max_age_seconds=int(settings["refresh_token_expire_days"]) * 24 * 60 * 60,
+    )
     logger.info("event=auth_login_success email=%s ip=%s", normalized_email, client_ip)
-    return {"data": tokens}
+    return {
+        "data": {
+            "logged_in": True,
+            "access_expires_in_seconds": int(tokens["access_expires_in_seconds"]),
+            "access_expires_in_minutes": int(tokens["access_expires_in_minutes"]),
+        }
+    }
 
 
 @router.post("/auth/refresh")
 def refresh(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    request: Request,
+    response: Response,
     db: Session = Depends(get_db_transactional),
 ):
-    if credentials is None:
+    refresh_token = get_refresh_token_from_request(request)
+    if not refresh_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing bearer token",
+            detail="Missing refresh token cookie",
         )
     try:
-        tokens = refresh_with_token(refresh_token=credentials.credentials, db=db)
+        tokens = refresh_with_token(refresh_token=refresh_token, db=db)
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
-    return {"data": tokens}
+    settings = obtener_config_jwt()
+    set_auth_cookies(
+        response=response,
+        access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
+        access_max_age_seconds=int(tokens["access_expires_in_seconds"]),
+        refresh_max_age_seconds=int(settings["refresh_token_expire_days"]) * 24 * 60 * 60,
+    )
+    return {
+        "data": {
+            "refreshed": True,
+            "access_expires_in_seconds": int(tokens["access_expires_in_seconds"]),
+            "access_expires_in_minutes": int(tokens["access_expires_in_minutes"]),
+        }
+    }
 
 
 @router.post("/auth/logout")
 def logout(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    request: Request,
+    response: Response,
     db: Session = Depends(get_db_transactional),
 ):
-    if credentials is None:
+    refresh_token = get_refresh_token_from_request(request)
+    if not refresh_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing bearer token",
+            detail="Missing refresh token cookie",
         )
     try:
-        logout_with_refresh_token(refresh_token=credentials.credentials, db=db)
+        logout_with_refresh_token(refresh_token=refresh_token, db=db)
     except Exception as exc:
         raise_http_error_from_exception(exc, db=db)
+    clear_auth_cookies(response=response)
     logger.info("event=auth_logout_success")
     return {"data": {"logged_out": True}}
 

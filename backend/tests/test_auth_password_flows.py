@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import HTTPException
+from fastapi import Response
 from starlette.requests import Request
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -32,7 +33,9 @@ from source.routes.auth_r import (
     password_change,
     password_reset_confirm,
     password_reset_request,
+    refresh,
     register,
+    logout,
 )
 from source.schemas.auth_s import (
     EmailRequest,
@@ -72,6 +75,28 @@ class AuthPasswordFlowsTests(unittest.TestCase):
             "client": (ip, 12345),
         }
         return Request(scope)
+
+    def _request_with_cookies(self, *, cookies: dict[str, str], path: str = "/auth/test") -> Request:
+        cookie_header = "; ".join(f"{key}={value}" for key, value in cookies.items())
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [(b"cookie", cookie_header.encode("utf-8"))],
+            "client": ("127.0.0.1", 12345),
+        }
+        return Request(scope)
+
+    @staticmethod
+    def _cookie_value_from_response(response: Response, cookie_name: str) -> str:
+        prefix = f"{cookie_name}="
+        for key, value in response.raw_headers:
+            if key.decode("latin-1").lower() != "set-cookie":
+                continue
+            cookie = value.decode("latin-1")
+            if cookie.startswith(prefix):
+                return cookie.split(";", 1)[0].split("=", 1)[1]
+        return ""
 
     def _create_verified_user(self, *, email: str, password_hash: str) -> int:
         db = SessionLocal()
@@ -140,10 +165,106 @@ class AuthPasswordFlowsTests(unittest.TestCase):
                 login(
                     payload=LoginRequest(email="nover@example.com", password="Strong!123"),
                     request=self._request(),
+                    response=Response(),
                     db=db,
                 )
             self.assertEqual(ctx.exception.status_code, 403)
             self.assertEqual(ctx.exception.detail, "email not verified")
+        finally:
+            db.close()
+
+    def test_login_sets_auth_cookies_and_hides_tokens_in_body(self) -> None:
+        db = SessionLocal()
+        try:
+            with patch("source.routes.auth_r.send_email_verification") as mocked_send:
+                register(
+                    payload=RegisterRequest(
+                        first_name="Cookie",
+                        last_name="Login",
+                        email="cookie-login@example.com",
+                        password="Strong!123",
+                    ),
+                    request=self._request(),
+                    db=db,
+                )
+            token = mocked_send.call_args.kwargs["verify_link"].split("token=")[1]
+            email_verify_confirm(payload=TokenRequest(token=token), db=db)
+
+            response = Response()
+            payload = login(
+                payload=LoginRequest(email="cookie-login@example.com", password="Strong!123"),
+                request=self._request(),
+                response=response,
+                db=db,
+            )
+            self.assertTrue(payload["data"]["logged_in"])
+            self.assertIn("access_expires_in_minutes", payload["data"])
+            self.assertNotIn("access_token", payload["data"])
+            self.assertNotIn("refresh_token", payload["data"])
+
+            access_cookie = self._cookie_value_from_response(response, "pb_at")
+            refresh_cookie = self._cookie_value_from_response(response, "pb_rt")
+            self.assertTrue(access_cookie)
+            self.assertTrue(refresh_cookie)
+        finally:
+            db.close()
+
+    def test_refresh_and_logout_work_with_refresh_cookie(self) -> None:
+        db = SessionLocal()
+        try:
+            with patch("source.routes.auth_r.send_email_verification") as mocked_send:
+                register(
+                    payload=RegisterRequest(
+                        first_name="Cookie",
+                        last_name="Refresh",
+                        email="cookie-refresh@example.com",
+                        password="Strong!123",
+                    ),
+                    request=self._request(),
+                    db=db,
+                )
+            token = mocked_send.call_args.kwargs["verify_link"].split("token=")[1]
+            email_verify_confirm(payload=TokenRequest(token=token), db=db)
+
+            login_response = Response()
+            login(
+                payload=LoginRequest(email="cookie-refresh@example.com", password="Strong!123"),
+                request=self._request(),
+                response=login_response,
+                db=db,
+            )
+            db.commit()
+            refresh_cookie_value = self._cookie_value_from_response(login_response, "pb_rt")
+            self.assertTrue(refresh_cookie_value)
+
+            refresh_response = Response()
+            refreshed = refresh(
+                request=self._request_with_cookies(
+                    cookies={"pb_rt": refresh_cookie_value},
+                    path="/auth/refresh",
+                ),
+                response=refresh_response,
+                db=db,
+            )
+            db.commit()
+            self.assertTrue(refreshed["data"]["refreshed"])
+            next_refresh_cookie = self._cookie_value_from_response(refresh_response, "pb_rt")
+            self.assertTrue(next_refresh_cookie)
+
+            logout_response = Response()
+            logged_out = logout(
+                request=self._request_with_cookies(
+                    cookies={"pb_rt": next_refresh_cookie},
+                    path="/auth/logout",
+                ),
+                response=logout_response,
+                db=db,
+            )
+            self.assertTrue(logged_out["data"]["logged_out"])
+            clear_access_cookie = self._cookie_value_from_response(logout_response, "pb_at")
+            clear_refresh_cookie = self._cookie_value_from_response(logout_response, "pb_rt")
+            self.assertIn(clear_access_cookie, {"", "\"\""})
+            self.assertIn(clear_refresh_cookie, {"", "\"\""})
         finally:
             db.close()
 

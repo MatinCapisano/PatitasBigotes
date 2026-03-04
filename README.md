@@ -10,6 +10,41 @@
 6. Set `JWT_ISSUER` consistently between token creation and validation.
 7. For auth emails, configure SMTP (`SMTP_*`) and `MAIL_FROM`.
 8. Set `APP_BASE_URL` so verification/reset links point to your frontend.
+9. Cookie auth config:
+   - `AUTH_COOKIE_ACCESS_NAME` (default `pb_at`)
+   - `AUTH_COOKIE_REFRESH_NAME` (default `pb_rt`)
+   - `AUTH_COOKIE_SAMESITE` (`lax|strict|none`)
+   - `AUTH_COOKIE_SECURE` (`true` in prod HTTPS; `false` in local HTTP)
+   - `AUTH_COOKIE_DOMAIN` (optional)
+   - `AUTH_COOKIE_PATH_ACCESS` (default `/`)
+   - `AUTH_COOKIE_PATH_REFRESH` (default `/auth`)
+10. For CSRF origin checks, set `CORS_ALLOW_ORIGINS` to the exact frontend origin list.
+
+## Auth cookie contract (backend phase 1)
+
+Auth endpoints are cookie-based (cookie-only):
+
+1. `POST /auth/login`: sets HttpOnly cookies `pb_at` + `pb_rt`, returns login status metadata (no tokens in body).
+2. `POST /auth/refresh`: reads `pb_rt` cookie, rotates session, rewrites `pb_at` + `pb_rt` cookies.
+3. `POST /auth/logout`: reads `pb_rt` cookie, invalidates refresh session, clears both cookies.
+4. Protected endpoints read access token from `pb_at` cookie.
+
+CSRF policy:
+
+1. Unsafe methods (`POST|PUT|PATCH|DELETE`) require allowed `Origin` or `Referer`.
+2. Allowed origins are derived from `CORS_ALLOW_ORIGINS`.
+3. `POST /payments/webhook/mercadopago` is exempt.
+
+## Frontend auth cookie (phase 2)
+
+Frontend auth now uses backend cookies (`pb_at`, `pb_rt`) with `axios` credentials.
+
+1. `frontend/src/services/http.ts` is configured with `withCredentials: true`.
+2. Frontend no longer stores auth tokens or admin flags in `localStorage`.
+3. Session bootstrap is done with `GET /auth/me` on app load.
+4. Keep host consistency for API base URL:
+   - Use only `localhost` or only `127.0.0.1`.
+   - Do not alternate hosts, because cookies are host-scoped.
 
 ## -JOBS-
 

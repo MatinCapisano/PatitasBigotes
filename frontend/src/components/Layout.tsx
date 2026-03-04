@@ -25,7 +25,7 @@ export function Layout() {
                 Ingresar
               </Link>
             ) : (
-              <button className="btn btn-small btn-ghost" onClick={logout} type="button">
+              <button className="btn btn-small btn-ghost" onClick={() => void logout()} type="button">
                 Salir
               </button>
             )}

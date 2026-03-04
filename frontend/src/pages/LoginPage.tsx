@@ -15,8 +15,8 @@ export function LoginPage() {
     setLoading(true);
     setError("");
     try {
-      await login(email, password);
-      navigate("/admin");
+      const admin = await login(email, password);
+      navigate(admin ? "/admin" : "/profile");
     } catch (err: unknown) {
       const status = (err as { response?: { status?: number } })?.response?.status;
       if (status === 403) {

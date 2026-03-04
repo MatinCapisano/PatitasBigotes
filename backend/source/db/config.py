@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -87,6 +88,53 @@ def get_mercadopago_webhook_max_age_seconds() -> int:
 
 def get_app_base_url() -> str:
     return os.getenv("APP_BASE_URL", "http://localhost:5173").strip().rstrip("/")
+
+
+def get_cors_allow_origins() -> list[str]:
+    raw_origins = os.getenv(
+        "CORS_ALLOW_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    )
+    return [origin.strip().rstrip("/") for origin in raw_origins.split(",") if origin.strip()]
+
+
+def get_auth_cookie_access_name() -> str:
+    return os.getenv("AUTH_COOKIE_ACCESS_NAME", "pb_at").strip() or "pb_at"
+
+
+def get_auth_cookie_refresh_name() -> str:
+    return os.getenv("AUTH_COOKIE_REFRESH_NAME", "pb_rt").strip() or "pb_rt"
+
+
+def get_auth_cookie_samesite() -> str:
+    value = os.getenv("AUTH_COOKIE_SAMESITE", "lax").strip().lower()
+    if value not in {"lax", "strict", "none"}:
+        raise RuntimeError("AUTH_COOKIE_SAMESITE must be one of: lax, strict, none")
+    return value
+
+
+def get_auth_cookie_secure() -> bool:
+    raw = os.getenv("AUTH_COOKIE_SECURE", "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    app_base_url = get_app_base_url()
+    parsed = urlparse(app_base_url)
+    return parsed.scheme.lower() == "https"
+
+
+def get_auth_cookie_domain() -> str | None:
+    value = os.getenv("AUTH_COOKIE_DOMAIN", "").strip()
+    return value or None
+
+
+def get_auth_cookie_path_access() -> str:
+    return os.getenv("AUTH_COOKIE_PATH_ACCESS", "/").strip() or "/"
+
+
+def get_auth_cookie_path_refresh() -> str:
+    return os.getenv("AUTH_COOKIE_PATH_REFRESH", "/auth").strip() or "/auth"
 
 
 def get_smtp_host() -> str:

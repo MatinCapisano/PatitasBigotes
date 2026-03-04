@@ -37,9 +37,7 @@ export type ApiEnvelope<T> = {
 };
 
 export type LoginResponse = {
-  access_token: string;
-  refresh_token: string;
-  token_type: string;
+  logged_in: boolean;
   access_expires_in_seconds: number;
   access_expires_in_minutes: number;
 };

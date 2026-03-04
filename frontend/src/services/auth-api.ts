@@ -9,6 +9,11 @@ export async function login(email: string, password: string) {
   return response.data.data;
 }
 
+export async function logout() {
+  const response = await http.post<ApiEnvelope<{ logged_out: boolean }>>("/auth/logout");
+  return response.data.data;
+}
+
 export async function getMyProfile() {
   const response = await http.get<ApiEnvelope<MyProfile>>("/auth/me");
   return response.data.data;
