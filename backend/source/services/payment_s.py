@@ -16,8 +16,12 @@ from source.db.config import (
     get_mercadopago_pending_url,
     get_mercadopago_success_url,
 )
-from source.db.models import Order, Payment, WebhookEvent
+from source.db.models import Order, Payment, PaymentIncident, WebhookEvent
 from source.exceptions import WebhookReplayConflictError
+from source.services.refund_s import (
+    PAYMENT_INCIDENT_STATUS_PENDING_REVIEW,
+    create_late_paid_incident_if_needed,
+)
 from source.services.mercadopago_client import create_checkout_preference
 from source.services.money_s import parse_amount_to_cents
 from source.services.stock_reservations_s import (
@@ -72,6 +76,23 @@ def _payment_to_dict(payment: Payment) -> dict:
         "created_at": payment.created_at,
         "updated_at": payment.updated_at,
     }
+
+
+def _open_incident_status_by_payment_ids(*, payment_ids: list[int], db: Session) -> dict[int, str]:
+    if not payment_ids:
+        return {}
+    rows = (
+        db.query(PaymentIncident.payment_id, PaymentIncident.status)
+        .filter(
+            PaymentIncident.payment_id.in_(payment_ids),
+            PaymentIncident.status == PAYMENT_INCIDENT_STATUS_PENDING_REVIEW,
+        )
+        .all()
+    )
+    result: dict[int, str] = {}
+    for payment_id, status in rows:
+        result[int(payment_id)] = str(status)
+    return result
 
 
 def _serialize_provider_payload(payload: dict | None) -> str | None:
@@ -807,7 +828,9 @@ def apply_mercadopago_normalized_state(
     if normalized_currency is not None and payment.currency.strip().upper() != normalized_currency:
         raise ValueError("payment currency mismatch")
 
-    _assert_valid_payment_transition(payment.status, internal_status)
+    allow_paid_revival = internal_status == "paid" and str(payment.status) in {"cancelled", "expired"}
+    if not allow_paid_revival:
+        _assert_valid_payment_transition(payment.status, internal_status)
     payment.provider_status = provider_status
 
     existing_payload = _deserialize_provider_payload(payment.provider_payload) or {}
@@ -834,14 +857,43 @@ def apply_mercadopago_normalized_state(
             payment.paid_at = now
 
     if internal_status == "paid":
-        if order.status not in {"submitted", "paid"}:
+        duplicate_paid_payment = (
+            db.query(Payment.id)
+            .filter(
+                Payment.order_id == int(order.id),
+                Payment.status == "paid",
+                Payment.id != int(payment.id),
+            )
+            .first()
+            is not None
+        )
+
+        if order.status == "cancelled":
+            create_late_paid_incident_if_needed(
+                order_id=int(order.id),
+                payment_id=int(payment.id),
+                reason="mercadopago approved after order cancellation",
+                db=db,
+            )
+        elif order.status == "paid":
+            if duplicate_paid_payment:
+                create_late_paid_incident_if_needed(
+                    order_id=int(order.id),
+                    payment_id=int(payment.id),
+                    reason="mercadopago approved but order already had another paid payment",
+                    db=db,
+                )
+        elif order.status != "submitted":
             raise ValueError("order can only be paid from submitted status")
+
         if order.status == "submitted":
             consume_reservations_for_paid_order(order_id=order.id, db=db)
-        if order.status != "paid":
             order.status = "paid"
-        if order.paid_at is None:
-            order.paid_at = now
+            if order.paid_at is None:
+                order.paid_at = now
+        elif order.status == "paid":
+            if order.paid_at is None:
+                order.paid_at = now
     elif internal_status == "cancelled":
         # A provider-level cancellation should only close this payment attempt.
         # The order stays in its current state so the customer can retry payment.
@@ -1273,7 +1325,16 @@ def list_payments_for_order_admin(
         .order_by(Payment.created_at.desc(), Payment.id.desc())
         .all()
     )
-    return [_payment_to_dict(payment) for payment in payments]
+    result = [_payment_to_dict(payment) for payment in payments]
+    status_by_payment = _open_incident_status_by_payment_ids(
+        payment_ids=[int(payment.id) for payment in payments],
+        db=db,
+    )
+    for item in result:
+        incident_status = status_by_payment.get(int(item["id"]))
+        item["has_open_incident"] = incident_status is not None
+        item["incident_status"] = incident_status
+    return result
 
 
 def get_payment_for_user(
@@ -1389,11 +1450,18 @@ def list_pending_bank_transfer_payments_for_admin(
         .all()
     )
     result: list[dict] = []
+    status_by_payment = _open_incident_status_by_payment_ids(
+        payment_ids=[int(payment.id) for payment in rows],
+        db=db,
+    )
     for payment in rows:
         item = _payment_to_dict(payment)
         order = payment.order
         item["order_status"] = order.status if order is not None else None
         item["user_id"] = int(order.user_id) if order is not None else None
+        incident_status = status_by_payment.get(int(payment.id))
+        item["has_open_incident"] = incident_status is not None
+        item["incident_status"] = incident_status
         result.append(item)
     return result
 
@@ -1426,11 +1494,18 @@ def list_payments_for_admin(
 
     rows = query.limit(safe_limit).all()
     result: list[dict] = []
+    status_by_payment = _open_incident_status_by_payment_ids(
+        payment_ids=[int(payment.id) for payment in rows],
+        db=db,
+    )
     for payment in rows:
         item = _payment_to_dict(payment)
         order = payment.order
         item["order_status"] = order.status if order is not None else None
         item["user_id"] = int(order.user_id) if order is not None else None
+        incident_status = status_by_payment.get(int(payment.id))
+        item["has_open_incident"] = incident_status is not None
+        item["incident_status"] = incident_status
         result.append(item)
     return result
 

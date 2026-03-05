@@ -20,6 +20,8 @@ from source.schemas.orders_s import (
 from source.schemas.payments_s import (
     AdminWebhookReplayRequest,
     CreateOrderPaymentRequest,
+    PaymentIncidentResolveNoRefundRequest,
+    PaymentIncidentResolveRefundRequest,
     SubmitBankTransferReceiptRequest,
 )
 from source.schemas.products_s import (
@@ -67,6 +69,8 @@ __all__ = [
     "CreateOrderPaymentRequest",
     "AdminWebhookReplayRequest",
     "SubmitBankTransferReceiptRequest",
+    "PaymentIncidentResolveRefundRequest",
+    "PaymentIncidentResolveNoRefundRequest",
     "CreateCategoryRequest",
     "CreateProductRequest",
     "CreateVariantRequest",

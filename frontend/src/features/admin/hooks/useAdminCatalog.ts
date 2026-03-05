@@ -3,7 +3,9 @@ import {
   type AdminCategory,
   type AdminProduct,
   type AdminVariant,
+  createAdminCategory,
   createAdminProduct,
+  deleteAdminCategory,
   deleteAdminProduct,
   listAdminCategories,
   listAdminProducts,
@@ -44,6 +46,15 @@ export function useAdminCatalog() {
   const [newImgUrl, setNewImgUrl] = useState("");
   const [newCategory, setNewCategory] = useState("");
   const [savingNew, setSavingNew] = useState(false);
+  const [showCreateCategoryForm, setShowCreateCategoryForm] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [creatingCategory, setCreatingCategory] = useState(false);
+  const [catalogCategoryFilter, setCatalogCategoryFilter] = useState<string>("all");
+  const [showAddStockModal, setShowAddStockModal] = useState(false);
+  const [stockProductId, setStockProductId] = useState("");
+  const [stockQuantity, setStockQuantity] = useState("1");
+  const [addingStock, setAddingStock] = useState(false);
+  const [stockSuccessMessage, setStockSuccessMessage] = useState("");
 
   const hasCategories = categories.length > 0;
 
@@ -104,6 +115,117 @@ export function useAdminCatalog() {
       setError("No se pudo crear el producto.");
     } finally {
       setSavingNew(false);
+    }
+  }
+
+  async function onCreateCategory(event: FormEvent) {
+    event.preventDefault();
+    const normalizedName = newCategoryName.trim();
+    if (!normalizedName) {
+      setError("Nombre de categoria requerido.");
+      return;
+    }
+    setCreatingCategory(true);
+    setError("");
+    try {
+      await createAdminCategory({ name: normalizedName });
+      setNewCategoryName("");
+      setShowCreateCategoryForm(false);
+      await loadAll();
+      setCatalogCategoryFilter(normalizedName);
+      setNewCategory(normalizedName);
+    } catch {
+      setError("No se pudo crear la categoria.");
+    } finally {
+      setCreatingCategory(false);
+    }
+  }
+
+  async function onDeleteCategory() {
+    if (catalogCategoryFilter === "all") {
+      setError("Selecciona una categoria para eliminar.");
+      return;
+    }
+    const categoryName = catalogCategoryFilter;
+    const category = categories.find((item) => item.name === categoryName);
+    if (!category) {
+      setError("Categoria no encontrada.");
+      return;
+    }
+    const hasProducts = products.some((product) => String(product.category || "") === categoryName);
+    if (hasProducts) {
+      setError("No se puede eliminar una categoria con productos.");
+      return;
+    }
+    const confirmDelete = window.confirm(`Eliminar categoria "${categoryName}"?`);
+    if (!confirmDelete) return;
+    setError("");
+    try {
+      await deleteAdminCategory(category.id);
+      setCatalogCategoryFilter("all");
+      await loadAll();
+    } catch {
+      setError("No se pudo eliminar la categoria.");
+    }
+  }
+
+  function onOpenAddStockModal() {
+    if (!stockProductId && products[0]?.id) {
+      setStockProductId(String(products[0].id));
+    }
+    setStockQuantity("1");
+    setStockSuccessMessage("");
+    setShowAddStockModal(true);
+    setError("");
+  }
+
+  async function onConfirmAddStock(selectedVariantIds: number[]) {
+    const parsedProductId = Number.parseInt(stockProductId, 10);
+    const parsedQty = Number.parseInt(stockQuantity, 10);
+    if (Number.isNaN(parsedProductId) || parsedProductId <= 0) {
+      setError("Selecciona un producto valido.");
+      return;
+    }
+    if (Number.isNaN(parsedQty) || parsedQty <= 0) {
+      setError("Cantidad de stock invalida.");
+      return;
+    }
+
+    const variants = variantsByProduct[parsedProductId] ?? [];
+    if (variants.length === 0) {
+      setError("El producto seleccionado no tiene variantes para actualizar stock.");
+      return;
+    }
+    if (!selectedVariantIds.length) {
+      setError("Selecciona al menos una variante.");
+      return;
+    }
+    const variantIdSet = new Set(selectedVariantIds.map((id) => Number(id)));
+    const variantsToUpdate = variants.filter((variant) => variantIdSet.has(Number(variant.id)));
+    if (variantsToUpdate.length === 0) {
+      setError("Las variantes seleccionadas no son validas para el producto.");
+      return;
+    }
+
+    setAddingStock(true);
+    setError("");
+    setStockSuccessMessage("");
+    try {
+      await Promise.all(
+        variantsToUpdate.map((variant) =>
+          patchAdminVariant(variant.id, {
+            stock: Number(variant.stock ?? 0) + parsedQty
+          })
+        )
+      );
+      await loadAll();
+      setStockProductId("");
+      setStockQuantity("0");
+      setStockSuccessMessage(`Stock actualizado en ${variantsToUpdate.length} variante(s).`);
+    } catch {
+      setError("No se pudo agregar stock al producto.");
+    } finally {
+      setAddingStock(false);
     }
   }
 
@@ -222,6 +344,30 @@ export function useAdminCatalog() {
     [products]
   );
 
+  const productsByCategory = useMemo(() => {
+    const grouped: Record<string, AdminProduct[]> = {};
+    for (const product of productsSorted) {
+      const categoryName = String(product.category || "Sin categoria");
+      if (!grouped[categoryName]) {
+        grouped[categoryName] = [];
+      }
+      grouped[categoryName].push(product);
+    }
+    return grouped;
+  }, [productsSorted]);
+
+  const categoryNames = useMemo(
+    () => categories.map((category) => category.name).sort((a, b) => a.localeCompare(b)),
+    [categories]
+  );
+
+  const visibleProducts = useMemo(() => {
+    if (catalogCategoryFilter === "all") {
+      return productsSorted;
+    }
+    return productsSorted.filter((product) => String(product.category || "") === catalogCategoryFilter);
+  }, [productsSorted, catalogCategoryFilter]);
+
   const variantOptions = useMemo<VariantOption[]>(() => {
     const rows: VariantOption[] = [];
     for (const product of products) {
@@ -240,11 +386,33 @@ export function useAdminCatalog() {
   return {
     categories,
     productsSorted,
+    productsByCategory,
+    visibleProducts,
+    categoryNames,
     variantsByProduct,
     variantOptions,
+    catalogCategoryFilter,
+    setCatalogCategoryFilter,
+    showAddStockModal,
+    setShowAddStockModal,
+    stockProductId,
+    setStockProductId,
+    stockQuantity,
+    setStockQuantity,
+    addingStock,
+    stockSuccessMessage,
+    onOpenAddStockModal,
+    onConfirmAddStock,
     showCreateProductForm,
     setShowCreateProductForm,
     onCreateProduct,
+    showCreateCategoryForm,
+    setShowCreateCategoryForm,
+    onCreateCategory,
+    onDeleteCategory,
+    newCategoryName,
+    setNewCategoryName,
+    creatingCategory,
     savingNew,
     newName,
     setNewName,

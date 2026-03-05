@@ -281,6 +281,7 @@ export function OrdersPaymentsSection(props: {
                   <p><strong>#{payment.id}</strong> {payment.method}</p>
                   <p className="muted">Estado: {payment.status}</p>
                   <p className="muted">Monto: {formatArs(payment.amount)}</p>
+                  {payment.has_open_incident ? <p className="error">Incidencia pago tardio pendiente</p> : null}
                   <div className="admin-product-actions">
                     <button className="btn btn-small" type="button" onClick={() => void loadAdminOrder(payment.order_id)}>
                       Ver orden #{payment.order_id}

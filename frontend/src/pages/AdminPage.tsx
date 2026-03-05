@@ -4,6 +4,7 @@ import {
   formatArs,
   useAdminCatalog,
   useAdminDiscounts,
+  useAdminPaymentIncidents,
   useAdminOrdersPayments,
   useAdminRegisterPayment,
   useAdminSales,
@@ -14,6 +15,7 @@ import {
   CatalogSection,
   DiscountsSection,
   OrdersPaymentsSection,
+  PaymentIncidentsSection,
   RegisterPaymentSection,
   SalesSection,
   TurnsSection
@@ -34,6 +36,7 @@ export function AdminPage() {
     adminSection,
     variantOptions: catalog.variantOptions
   });
+  const paymentIncidents = useAdminPaymentIncidents({ adminSection });
   const sales = useAdminSales({
     adminSection,
     productsSorted: catalog.productsSorted,
@@ -44,7 +47,7 @@ export function AdminPage() {
   return (
     <section>
       <h1 className="page-title">Panel Admin</h1>
-      <p className="page-subtitle">Elegi que queres gestionar: catalogo, descuentos, turnos, ordenes, pagos, registrar venta o registrar pago.</p>
+      <p className="page-subtitle">Elegi que queres gestionar: catalogo, descuentos, turnos, ordenes, pagos, incidencias de pago, registrar venta o registrar pago.</p>
       <AdminSectionTabs adminSection={adminSection} onSelect={setAdminSection} />
 
       {adminSection === "descuentos" && (
@@ -99,12 +102,34 @@ export function AdminPage() {
           newCategory={catalog.newCategory}
           setNewCategory={catalog.setNewCategory}
           categories={catalog.categories}
+          productsSorted={catalog.productsSorted}
+          categoryNames={catalog.categoryNames}
+          catalogCategoryFilter={catalog.catalogCategoryFilter}
+          setCatalogCategoryFilter={catalog.setCatalogCategoryFilter}
+          showAddStockModal={catalog.showAddStockModal}
+          setShowAddStockModal={catalog.setShowAddStockModal}
+          stockProductId={catalog.stockProductId}
+          setStockProductId={catalog.setStockProductId}
+          stockQuantity={catalog.stockQuantity}
+          setStockQuantity={catalog.setStockQuantity}
+          addingStock={catalog.addingStock}
+          stockSuccessMessage={catalog.stockSuccessMessage}
+          onOpenAddStockModal={catalog.onOpenAddStockModal}
+          onConfirmAddStock={catalog.onConfirmAddStock}
+          showCreateCategoryForm={catalog.showCreateCategoryForm}
+          setShowCreateCategoryForm={catalog.setShowCreateCategoryForm}
+          onCreateCategory={catalog.onCreateCategory}
+          onDeleteCategory={catalog.onDeleteCategory}
+          newCategoryName={catalog.newCategoryName}
+          setNewCategoryName={catalog.setNewCategoryName}
+          creatingCategory={catalog.creatingCategory}
           newDescription={catalog.newDescription}
           setNewDescription={catalog.setNewDescription}
           newImgUrl={catalog.newImgUrl}
           setNewImgUrl={catalog.setNewImgUrl}
           loading={catalog.loading}
-          productsSorted={catalog.productsSorted}
+          visibleProducts={catalog.visibleProducts}
+          productsByCategory={catalog.productsByCategory}
           variantsByProduct={catalog.variantsByProduct}
           expandedProducts={catalog.expandedProducts}
           toggleProductExpanded={catalog.toggleProductExpanded}
@@ -216,6 +241,18 @@ export function AdminPage() {
           manualPayAmount={ordersPayments.manualPayAmount}
           setManualPayAmount={ordersPayments.setManualPayAmount}
           onMarkOrderPaid={ordersPayments.onMarkOrderPaid}
+          formatArs={formatArs}
+        />
+      )}
+
+      {adminSection === "incidencias_pago" && (
+        <PaymentIncidentsSection
+          error={paymentIncidents.error}
+          success={paymentIncidents.success}
+          loading={paymentIncidents.loading}
+          incidents={paymentIncidents.incidents}
+          resolveWithRefund={paymentIncidents.resolveWithRefund}
+          resolveWithoutRefund={paymentIncidents.resolveWithoutRefund}
           formatArs={formatArs}
         />
       )}

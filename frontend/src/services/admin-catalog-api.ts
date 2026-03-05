@@ -39,6 +39,16 @@ export async function listAdminCategories(): Promise<AdminCategory[]> {
   return response.data.data;
 }
 
+export async function createAdminCategory(payload: { name: string }): Promise<AdminCategory> {
+  const response = await http.post<{ data: AdminCategory }>("/categories", payload);
+  return response.data.data;
+}
+
+export async function deleteAdminCategory(categoryId: number): Promise<AdminCategory> {
+  const response = await http.delete<{ data: AdminCategory }>(`/categories/${categoryId}`);
+  return response.data.data;
+}
+
 export async function createAdminProduct(payload: {
   name: string;
   description: string | null;

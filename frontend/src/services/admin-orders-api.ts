@@ -58,8 +58,36 @@ export type AdminPayment = {
   preference_id: string | null;
   order_status?: "draft" | "submitted" | "paid" | "cancelled" | null;
   user_id?: number | null;
+  has_open_incident?: boolean;
+  incident_status?: "pending_review" | "resolved_refunded" | "resolved_no_refund" | null;
   created_at: string;
   paid_at: string | null;
+};
+
+export type AdminPaymentIncident = {
+  id: number;
+  order_id: number;
+  payment_id: number;
+  type: "late_paid_duplicate";
+  status: "pending_review" | "resolved_refunded" | "resolved_no_refund";
+  reason: string | null;
+  created_at: string;
+  resolved_at: string | null;
+  resolved_by_user_id: number | null;
+  payment: {
+    id: number | null;
+    method: "bank_transfer" | "mercadopago" | "cash" | null;
+    status: "pending" | "paid" | "cancelled" | "expired" | null;
+    amount: number | null;
+    currency: "ARS" | null;
+    external_ref: string | null;
+  };
+  order: {
+    id: number | null;
+    status: "draft" | "submitted" | "paid" | "cancelled" | null;
+    total_amount: number | null;
+    user_id: number | null;
+  };
 };
 
 export async function createManualSubmittedOrder(payload: {
@@ -115,6 +143,44 @@ export async function adminMarkOrderPaid(orderId: number, paymentRef: string, pa
     payment_ref: paymentRef,
     paid_amount: paidAmount
   });
+  return response.data.data;
+}
+
+export async function listAdminPaymentIncidents(params?: {
+  status?: "pending_review" | "resolved_refunded" | "resolved_no_refund";
+  limit?: number;
+}): Promise<AdminPaymentIncident[]> {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  const response = await http.get<{ data: AdminPaymentIncident[] }>(`/admin/payment-incidents?${qs.toString()}`);
+  return response.data.data;
+}
+
+export async function resolveAdminPaymentIncidentRefund(payload: {
+  incident_id: number;
+  amount?: number;
+  reason: string;
+}): Promise<{ incident: AdminPaymentIncident; refund: { id: number; status: string; provider_refund_id: string | null } }> {
+  const response = await http.post<{
+    data: { incident: AdminPaymentIncident; refund: { id: number; status: string; provider_refund_id: string | null } };
+  }>(`/admin/payment-incidents/${payload.incident_id}/resolve-refund`, {
+    amount: payload.amount,
+    reason: payload.reason
+  });
+  return response.data.data;
+}
+
+export async function resolveAdminPaymentIncidentNoRefund(payload: {
+  incident_id: number;
+  reason: string;
+}): Promise<AdminPaymentIncident> {
+  const response = await http.post<{ data: AdminPaymentIncident }>(
+    `/admin/payment-incidents/${payload.incident_id}/resolve-no-refund`,
+    {
+      reason: payload.reason
+    }
+  );
   return response.data.data;
 }
 

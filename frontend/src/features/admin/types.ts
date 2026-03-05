@@ -1,4 +1,12 @@
-export type AdminSection = "catalogo" | "descuentos" | "turnos" | "ordenes" | "pagos" | "registrar_venta" | "registrar_pago";
+export type AdminSection =
+  | "catalogo"
+  | "descuentos"
+  | "turnos"
+  | "ordenes"
+  | "pagos"
+  | "incidencias_pago"
+  | "registrar_venta"
+  | "registrar_pago";
 
 export type ManualOrderItem = {
   variant_id: number;

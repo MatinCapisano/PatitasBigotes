@@ -200,6 +200,16 @@ class Order(Base):
         back_populates="order",
         cascade="all, delete-orphan",
     )
+    payment_incidents = relationship(
+        "PaymentIncident",
+        back_populates="order",
+        cascade="all, delete-orphan",
+    )
+    payment_refunds = relationship(
+        "PaymentRefund",
+        back_populates="order",
+        cascade="all, delete-orphan",
+    )
     stock_reservations = relationship(
         "StockReservation",
         back_populates="order",
@@ -310,6 +320,123 @@ class Payment(Base):
     )
 
     order = relationship("Order", back_populates="payments")
+    incidents = relationship(
+        "PaymentIncident",
+        back_populates="payment",
+        cascade="all, delete-orphan",
+    )
+    refunds = relationship(
+        "PaymentRefund",
+        back_populates="payment",
+        cascade="all, delete-orphan",
+    )
+
+
+class PaymentIncident(Base):
+    __tablename__ = "payment_incidents"
+    __table_args__ = (
+        Index(
+            "uq_payment_incidents_open_per_payment_type",
+            "payment_id",
+            "type",
+            unique=True,
+            postgresql_where=text("status = 'pending_review'"),
+            sqlite_where=text("status = 'pending_review'"),
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(
+        Integer,
+        ForeignKey("orders.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    payment_id = Column(
+        Integer,
+        ForeignKey("payments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    type = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=False, default="pending_review", index=True)
+    reason = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_by_user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    order = relationship("Order", back_populates="payment_incidents")
+    payment = relationship("Payment", back_populates="incidents")
+    resolved_by = relationship("User")
+    refunds = relationship(
+        "PaymentRefund",
+        back_populates="incident",
+        cascade="all, delete-orphan",
+    )
+
+
+class PaymentRefund(Base):
+    __tablename__ = "payment_refunds"
+    __table_args__ = (
+        Index(
+            "uq_payment_refunds_active_per_payment",
+            "payment_id",
+            unique=True,
+            postgresql_where=text("status IN ('requested','approved')"),
+            sqlite_where=text("status IN ('requested','approved')"),
+        ),
+        CheckConstraint("amount > 0", name="ck_payment_refunds_amount_positive"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(
+        Integer,
+        ForeignKey("orders.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    payment_id = Column(
+        Integer,
+        ForeignKey("payments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    incident_id = Column(
+        Integer,
+        ForeignKey("payment_incidents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    amount = Column(Integer, nullable=False)
+    currency = Column(String, nullable=False, default="ARS")
+    provider = Column(String, nullable=False, default="mercadopago")
+    provider_refund_id = Column(String, nullable=True, index=True)
+    status = Column(String, nullable=False, default="requested", index=True)
+    idempotency_key = Column(String, nullable=False, unique=True, index=True)
+    requested_by_user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    requested_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+    provider_payload = Column(Text, nullable=True)
+
+    order = relationship("Order", back_populates="payment_refunds")
+    payment = relationship("Payment", back_populates="refunds")
+    incident = relationship("PaymentIncident", back_populates="refunds")
+    requested_by = relationship("User")
 
 
 class WebhookEvent(Base):
