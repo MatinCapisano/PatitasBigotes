@@ -142,6 +142,20 @@ Behavior:
 
 Idempotency records are stored in `idempotency_records` and expire after 24 hours.
 
+## Admin sales flow (registrar venta)
+
+Nuevo endpoint recomendado para ventas manuales en admin:
+
+1. `POST /admin/sales`
+   - Crea orden `submitted` para un usuario existente o nuevo.
+   - Opcionalmente registra pago vinculado (`cash` o `bank_transfer`) y deja la orden en `paid`.
+   - Soporta `Idempotency-Key` opcional para evitar duplicados por doble click.
+
+### Legacy
+
+1. `POST /orders/manual/submitted` sigue activo por compatibilidad, pero esta deprecado.
+2. `POST /admin/orders/{order_id}/pay/manual` sigue activo para pagar ordenes existentes.
+
 ## Stock reservations expiration job
 
 For production-like latency, reservation expiration should run outside request paths.

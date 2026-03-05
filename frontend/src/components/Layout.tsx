@@ -6,6 +6,7 @@ export function Layout() {
   const location = useLocation();
   const { isAuthenticated, logout } = useAuth();
   const currentCartCount = cartCount();
+  const isAdminRoute = location.pathname.startsWith("/admin");
 
   return (
     <div className="app-root">
@@ -54,7 +55,7 @@ export function Layout() {
           </nav>
         </div>
       </header>
-      <main className="container page">
+      <main className={isAdminRoute ? "container page page-admin" : "container page"}>
         <Outlet />
       </main>
     </div>

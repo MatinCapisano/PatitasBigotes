@@ -3,7 +3,7 @@
 :root {
   font-family: "Nunito Sans", "Segoe UI", sans-serif;
   color: #0f172a;
-  background: #ffffff;
+  background: #f6f7f8;
 }
 
 * {
@@ -16,7 +16,7 @@ body {
 
 .app-root {
   min-height: 100vh;
-  background: #ffffff;
+  background: #f6f7f8;
 }
 
 a {
@@ -110,6 +110,10 @@ a {
 
 .page {
   padding: 1.5rem 0 3rem;
+}
+
+.page-admin {
+  width: min(1340px, calc(100% - 2rem));
 }
 
 .page-title {
@@ -508,6 +512,83 @@ a {
   margin-top: 1rem;
 }
 
+.admin-search-box {
+  margin-top: 0.75rem;
+}
+
+.admin-search-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: end;
+}
+
+.admin-search-field {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  min-width: 170px;
+  max-width: 230px;
+  flex: 1 1 210px;
+}
+
+.admin-user-search-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(240px, 1fr) minmax(220px, 1fr);
+  gap: 0.6rem;
+  align-items: center;
+  border-top: 1px solid #ececec;
+  padding-top: 0.5rem;
+}
+
+.admin-sales-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.admin-sales-block {
+  display: grid;
+  gap: 0.7rem;
+  border: 1px solid #ececec;
+  border-radius: 12px;
+  padding: 0.85rem;
+}
+
+.admin-sales-fields {
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: 1fr;
+}
+
+.admin-sales-fields label {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+}
+
+.admin-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.4);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  z-index: 50;
+}
+
+.admin-modal {
+  width: min(980px, 100%);
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+}
+
+.admin-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
 .admin-section-tabs {
   margin: 0.8rem 0 1rem;
   display: flex;
@@ -528,6 +609,15 @@ a {
   display: grid;
   gap: 0.45rem;
   padding-right: 0.3rem;
+}
+
+.admin-search-results-list {
+  max-height: 300px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.5rem;
 }
 
 .admin-discount-picker-wrap {
@@ -590,6 +680,10 @@ a {
   }
 
   .admin-variant-row {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-user-search-row {
     grid-template-columns: 1fr;
   }
 }

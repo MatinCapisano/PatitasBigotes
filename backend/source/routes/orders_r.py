@@ -8,6 +8,8 @@ from source.db.session import get_db_transactional
 from source.errors import raise_http_error_from_exception
 from source.schemas import (
     AddOrderItemRequest,
+    AdminRegisterPaymentRequest,
+    CreateAdminSaleRequest,
     CreateManualSubmittedOrderRequest,
     CreateOrderPaymentRequest,
     PayOrderRequest,
@@ -18,6 +20,7 @@ from source.schemas import (
 from source.services.orders_s import (
     add_item_to_draft_order,
     change_order_status,
+    create_admin_sale,
     create_manual_submitted_order,
     get_order_for_admin,
     get_order_reservations_for_user,
@@ -40,6 +43,7 @@ from source.services.idempotency_s import (
     prune_expired_records,
 )
 from source.services.payment_s import (
+    confirm_manual_payment_for_order,
     create_payment_for_order,
     create_retry_payment_for_order,
     list_payments_for_order_admin,
@@ -138,7 +142,7 @@ def create_guest_checkout_order(
     return {"data": result}
 
 
-@router.post("/orders/manual/submitted")
+@router.post("/orders/manual/submitted", deprecated=True)
 def create_manual_submitted(
     payload: CreateManualSubmittedOrderRequest,
     _: dict = Depends(require_admin),
@@ -154,6 +158,66 @@ def create_manual_submitted(
             db=db,
         )
     except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+    return {"data": result}
+
+
+@router.post("/admin/sales")
+def create_admin_sale_endpoint(
+    payload: CreateAdminSaleRequest,
+    admin_user: dict = Depends(require_admin),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db_transactional),
+):
+    admin_user_id = get_current_user_id(admin_user)
+    record_created = False
+    claimed_record = None
+    try:
+        if idempotency_key is not None and str(idempotency_key).strip():
+            now = datetime.now(UTC)
+            prune_expired_records(now=now, db=db)
+            normalized_key = normalize_idempotency_key(idempotency_key)
+            scope = f"admin_sales:{int(admin_user_id)}"
+            canonical_payload = canonicalize_payload(payload.model_dump())
+            request_hash = hash_payload(canonical_payload)
+            claimed_record, record_created = acquire_record(
+                scope=scope,
+                idempotency_key=normalized_key,
+                request_hash=request_hash,
+                expires_at=now + timedelta(hours=IDEMPOTENCY_TTL_HOURS),
+                db=db,
+            )
+            if not record_created:
+                if claimed_record.request_hash != request_hash:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="idempotency key already used with a different payload",
+                    )
+                if claimed_record.status == "completed":
+                    return {"data": load_replay_payload(claimed_record)}
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="idempotent request already in progress",
+                )
+
+        result = create_admin_sale(
+            admin_user_id=int(admin_user_id),
+            customer=payload.customer.model_dump(),
+            items=[item.model_dump() for item in payload.items],
+            register_payment=bool(payload.register_payment),
+            payment=payload.payment.model_dump() if payload.payment is not None else None,
+            db=db,
+        )
+        if record_created and claimed_record is not None:
+            mark_record_completed(
+                record=claimed_record,
+                response_payload=result,
+                db=db,
+            )
+    except Exception as exc:
+        if record_created and claimed_record is not None and claimed_record.status == "processing":
+            db.delete(claimed_record)
+            db.flush()
         raise_http_error_from_exception(exc, db=db)
     return {"data": result}
 
@@ -326,6 +390,37 @@ def admin_manual_pay_order_endpoint(
         raise_http_error_from_exception(exc, db=db)
 
     return {"data": order}
+
+
+@router.post("/admin/orders/{order_id}/payments/manual")
+def admin_register_manual_payment(
+    order_id: int,
+    payload: AdminRegisterPaymentRequest,
+    _: dict = Depends(require_admin),
+    db: Session = Depends(get_db_transactional),
+):
+    try:
+        order = get_order_for_admin(order_id=order_id, db=db)
+        if order is None:
+            raise LookupError("order not found")
+        payment = confirm_manual_payment_for_order(
+            order_id=order_id,
+            user_id=int(order["user_id"]),
+            payment_ref=str(payload.payment_ref or ""),
+            paid_amount=int(payload.paid_amount),
+            method=payload.method,
+            change_amount=payload.change_amount,
+            db=db,
+        )
+        updated_order = get_order_for_admin(order_id=order_id, db=db)
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+    return {
+        "data": {
+            "order": updated_order,
+            "payment": payment,
+        }
+    }
 
 
 @router.post("/orders/{order_id}/payments", status_code=status.HTTP_201_CREATED)

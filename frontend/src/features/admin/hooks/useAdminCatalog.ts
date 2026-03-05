@@ -229,7 +229,8 @@ export function useAdminCatalog() {
       for (const variant of variants) {
         rows.push({
           value: String(variant.id),
-          label: `${product.name} | ${variant.sku} (${variant.size || "-"} / ${variant.color || "-"})`
+          label: `${product.name} | ${variant.sku} (${variant.size || "-"} / ${variant.color || "-"})`,
+          priceCents: Number(variant.price ?? 0)
         });
       }
     }

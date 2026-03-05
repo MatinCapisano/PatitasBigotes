@@ -50,6 +50,11 @@ export function useAdminOrdersPayments(params: {
     setOrderPayments(payments);
   }
 
+  function closeSelectedOrder() {
+    setSelectedOrder(null);
+    setOrderPayments([]);
+  }
+
   function onAddManualItem() {
     const parsedVariantId = Number.parseInt(manualVariantId, 10);
     const parsedQty = Number.parseInt(manualQuantity, 10);
@@ -203,6 +208,7 @@ export function useAdminOrdersPayments(params: {
     ordersListLoading,
     ordersList,
     loadAdminOrder,
+    closeSelectedOrder,
     paymentsFilter,
     setPaymentsFilter,
     paymentsSortBy,

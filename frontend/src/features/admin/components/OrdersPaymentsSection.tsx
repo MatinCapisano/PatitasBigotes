@@ -36,6 +36,7 @@ export function OrdersPaymentsSection(props: {
   ordersListLoading: boolean;
   ordersList: AdminOrder[];
   loadAdminOrder: (orderId: number) => Promise<void>;
+  closeSelectedOrder: () => void;
   paymentsFilter: "all" | "pending" | "paid" | "cancelled" | "expired";
   setPaymentsFilter: (value: "all" | "pending" | "paid" | "cancelled" | "expired") => void;
   paymentsSortBy: "created_at" | "id";
@@ -92,6 +93,7 @@ export function OrdersPaymentsSection(props: {
     ordersListLoading,
     ordersList,
     loadAdminOrder,
+    closeSelectedOrder,
     paymentsFilter,
     setPaymentsFilter,
     paymentsSortBy,
@@ -128,9 +130,6 @@ export function OrdersPaymentsSection(props: {
       {adminSection === "ordenes" && (
         <>
           <div className="admin-inline-actions">
-            <button className="btn btn-small btn-ghost" type="button" onClick={() => setShowCreateManualOrderForm((v) => !v)}>
-              {showCreateManualOrderForm ? "Ocultar crear orden" : "Crear orden manual"}
-            </button>
             <select className="input" value={ordersFilter} onChange={(e) => setOrdersFilter(e.target.value as "all" | "submitted" | "paid" | "cancelled")}>
               <option value="all">Todas</option>
               <option value="submitted">Submitted</option>
@@ -269,9 +268,6 @@ export function OrdersPaymentsSection(props: {
             <button className="btn btn-small" type="button" onClick={() => setPaymentsShowAll((v) => !v)}>
               {paymentsShowAll ? "Mostrar ultimos 10" : "Mostrar todos"}
             </button>
-            <button className="btn btn-small btn-ghost" type="button" onClick={() => setShowManualPaymentForm((v) => !v)}>
-              {showManualPaymentForm ? "Ocultar pago manual" : "Confirmar pago manual"}
-            </button>
           </div>
           <h3>Listado de pagos</h3>
           {paymentsListLoading ? (
@@ -298,61 +294,75 @@ export function OrdersPaymentsSection(props: {
       )}
 
       {selectedOrder && (
-        <div className="admin-edit-box">
-          <p>
-            <strong>Orden #{selectedOrder.id}</strong> | Estado: {selectedOrder.status} | Total: {formatArs(selectedOrder.total_amount)}
-          </p>
-          <div className="admin-variants-grid">
-            {selectedOrder.items.map((item) => (
-              <div className="admin-variant-row" key={item.id}>
-                <p>
-                  {item.product_name || "Producto"} - {item.variant_label}
-                </p>
-                <p className="muted">Qty: {item.quantity}</p>
-                <p className="muted">Subtotal linea: {formatArs(item.line_total)}</p>
-              </div>
-            ))}
-          </div>
-
-          {adminSection === "pagos" && (
-            <>
-              {showManualPaymentForm && (
-                <div className="admin-form-grid">
-                  <label>
-                    Ref pago manual
-                    <input className="input" value={manualPayRef} onChange={(e) => setManualPayRef(e.target.value)} />
-                  </label>
-                  <label>
-                    Monto (centavos ARS)
-                    <input className="input" type="number" min={1} value={manualPayAmount} onChange={(e) => setManualPayAmount(e.target.value)} />
-                  </label>
-                  <div className="admin-inline-actions">
-                    <button className="btn btn-small" type="button" onClick={() => void onMarkOrderPaid()}>
-                      Marcar como pagada
-                    </button>
-                  </div>
+        <div className="admin-modal-overlay" role="dialog" aria-modal="true">
+          <div className="card admin-modal">
+            <div className="admin-modal-header">
+              <h3>Detalle de orden</h3>
+              <button className="btn btn-small btn-ghost" type="button" onClick={closeSelectedOrder}>
+                Cerrar
+              </button>
+            </div>
+            <p>
+              <strong>Orden #{selectedOrder.id}</strong> | Estado: {selectedOrder.status} | Total: {formatArs(selectedOrder.total_amount)}
+            </p>
+            <div className="admin-form-grid">
+              <p><strong>Nombre:</strong> {selectedOrder.customer?.first_name || "-"}</p>
+              <p><strong>Apellido:</strong> {selectedOrder.customer?.last_name || "-"}</p>
+              <p><strong>Telefono:</strong> {selectedOrder.customer?.phone || "-"}</p>
+              <p><strong>Email:</strong> {selectedOrder.customer?.email || "-"}</p>
+            </div>
+            <div className="admin-variants-grid">
+              {selectedOrder.items.map((item) => (
+                <div className="admin-variant-row" key={item.id}>
+                  <p>
+                    {item.product_name || "Producto"} - {item.variant_label}
+                  </p>
+                  <p className="muted">Qty: {item.quantity}</p>
+                  <p className="muted">Subtotal linea: {formatArs(item.line_total)}</p>
                 </div>
-              )}
+              ))}
+            </div>
 
-              <h4>Pagos</h4>
-              {orderPayments.length === 0 ? (
-                <p className="muted">Sin pagos para esta orden.</p>
-              ) : (
-                <div className="admin-variants-grid">
-                  {orderPayments.map((payment) => (
-                    <div className="admin-variant-row" key={payment.id}>
-                      <p>
-                        #{payment.id} {payment.method}
-                      </p>
-                      <p className="muted">Estado: {payment.status}</p>
-                      <p className="muted">Monto: {formatArs(payment.amount)}</p>
-                      <p className="muted">Ref: {payment.external_ref || "-"}</p>
+            {adminSection === "pagos" && (
+              <>
+                {showManualPaymentForm && (
+                  <div className="admin-form-grid">
+                    <label>
+                      Ref pago manual
+                      <input className="input" value={manualPayRef} onChange={(e) => setManualPayRef(e.target.value)} />
+                    </label>
+                    <label>
+                      Monto (centavos ARS)
+                      <input className="input" type="number" min={1} value={manualPayAmount} onChange={(e) => setManualPayAmount(e.target.value)} />
+                    </label>
+                    <div className="admin-inline-actions">
+                      <button className="btn btn-small" type="button" onClick={() => void onMarkOrderPaid()}>
+                        Marcar como pagada
+                      </button>
                     </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
+                  </div>
+                )}
+
+                <h4>Pagos</h4>
+                {orderPayments.length === 0 ? (
+                  <p className="muted">Sin pagos para esta orden.</p>
+                ) : (
+                  <div className="admin-variants-grid">
+                    {orderPayments.map((payment) => (
+                      <div className="admin-variant-row" key={payment.id}>
+                        <p>
+                          #{payment.id} {payment.method}
+                        </p>
+                        <p className="muted">Estado: {payment.status}</p>
+                        <p className="muted">Monto: {formatArs(payment.amount)}</p>
+                        <p className="muted">Ref: {payment.external_ref || "-"}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </div>
       )}
     </article>

@@ -1,4 +1,4 @@
-export type AdminSection = "catalogo" | "descuentos" | "turnos" | "ordenes" | "pagos";
+export type AdminSection = "catalogo" | "descuentos" | "turnos" | "ordenes" | "pagos" | "registrar_venta" | "registrar_pago";
 
 export type ManualOrderItem = {
   variant_id: number;
@@ -9,4 +9,5 @@ export type ManualOrderItem = {
 export type VariantOption = {
   value: string;
   label: string;
+  priceCents?: number;
 };

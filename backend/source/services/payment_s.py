@@ -26,7 +26,7 @@ from source.services.stock_reservations_s import (
     list_active_reservations_for_order,
 )
 
-ALLOWED_PAYMENT_METHODS = {"bank_transfer", "mercadopago"}
+ALLOWED_PAYMENT_METHODS = {"bank_transfer", "mercadopago", "cash"}
 RETRYABLE_PAYMENT_STATUSES = {"cancelled", "expired"}
 DEFAULT_WEBHOOK_MAX_ATTEMPTS = 4
 DEFAULT_WEBHOOK_RETRY_DELAY_MINUTES = 60
@@ -58,6 +58,7 @@ def _payment_to_dict(payment: Payment) -> dict:
         "method": payment.method,
         "status": payment.status,
         "amount": int(payment.amount),
+        "change_amount": int(payment.change_amount) if payment.change_amount is not None else None,
         "currency": payment.currency,
         "idempotency_key": payment.idempotency_key,
         "external_ref": payment.external_ref,
@@ -1094,9 +1095,9 @@ def list_reconcilable_pending_mercadopago_payments(
     )
 
 
-def _build_manual_payment_idempotency_key(order_id: int, payment_ref: str) -> str:
-    digest = hashlib.sha256(payment_ref.encode("utf-8")).hexdigest()[:16]
-    return f"manual-order-{order_id}-{digest}"
+def _build_manual_payment_idempotency_key(order_id: int, payment_ref: str, method: str) -> str:
+    digest = hashlib.sha256(f"{method}:{payment_ref}".encode("utf-8")).hexdigest()[:16]
+    return f"manual-order-{order_id}-{method}-{digest}"
 
 
 def confirm_manual_payment_for_order(
@@ -1105,6 +1106,8 @@ def confirm_manual_payment_for_order(
     user_id: int,
     payment_ref: str,
     paid_amount: int,
+    method: str = "bank_transfer",
+    change_amount: int | None = None,
     db: Session,
 ) -> dict:
     expire_active_reservations_for_order(
@@ -1113,11 +1116,27 @@ def confirm_manual_payment_for_order(
         db=db,
     )
 
-    normalized_ref = payment_ref.strip()
-    if not normalized_ref:
-        raise ValueError("payment_ref is required")
+    normalized_ref = str(payment_ref or "").strip()
+    normalized_method = str(method or "").strip().lower()
+    if normalized_method not in {"bank_transfer", "cash"}:
+        raise ValueError("manual payment method must be bank_transfer or cash")
+    if normalized_method == "bank_transfer" and not normalized_ref:
+        raise ValueError("payment_ref is required for bank_transfer")
+    if normalized_method == "cash" and not normalized_ref:
+        normalized_ref = f"cash-order-{int(order_id)}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
     if int(paid_amount) <= 0:
         raise ValueError("paid_amount must be greater than 0")
+    normalized_change_amount = (
+        int(change_amount) if change_amount is not None else None
+    )
+    if normalized_method == "cash":
+        if normalized_change_amount is None:
+            raise ValueError("change_amount is required for cash payments")
+        if normalized_change_amount < 0:
+            raise ValueError("change_amount cannot be negative")
+    else:
+        if normalized_change_amount is not None:
+            raise ValueError("change_amount is only allowed for cash payments")
 
     order = (
         db.query(Order)
@@ -1141,8 +1160,12 @@ def confirm_manual_payment_for_order(
 
     expected_total = int(order.total_amount or 0)
     received_total = int(paid_amount)
-    if expected_total != received_total:
-        raise ValueError("paid_amount does not match order total")
+    if normalized_method == "cash":
+        if received_total - int(normalized_change_amount or 0) != expected_total:
+            raise ValueError("amount_paid minus change_amount must match order total")
+    else:
+        if expected_total != received_total:
+            raise ValueError("paid_amount does not match order total")
 
     existing_paid_by_ref = (
         db.query(Payment)
@@ -1169,11 +1192,12 @@ def confirm_manual_payment_for_order(
     if payment is None:
         payment = Payment(
             order_id=order.id,
-            method="bank_transfer",
+            method=normalized_method,
             status="paid",
             amount=received_total,
+            change_amount=normalized_change_amount,
             currency=order.currency or "ARS",
-            idempotency_key=_build_manual_payment_idempotency_key(order.id, normalized_ref),
+            idempotency_key=_build_manual_payment_idempotency_key(order.id, normalized_ref, normalized_method),
             external_ref=normalized_ref,
             provider_status="manual_confirmed",
             provider_payload=None,
@@ -1183,9 +1207,10 @@ def confirm_manual_payment_for_order(
         )
         db.add(payment)
     else:
-        payment.method = payment.method or "bank_transfer"
+        payment.method = payment.method or normalized_method
         payment.status = "paid"
         payment.amount = received_total
+        payment.change_amount = normalized_change_amount
         payment.currency = order.currency or payment.currency or "ARS"
         payment.external_ref = normalized_ref
         payment.provider_status = "manual_confirmed"
@@ -1195,6 +1220,9 @@ def confirm_manual_payment_for_order(
         {
             "manual_confirmation": {
                 "payment_ref": normalized_ref,
+                "method": normalized_method,
+                "amount_paid": received_total,
+                "change_amount": normalized_change_amount,
                 "confirmed_at": now.isoformat() + "Z",
             }
         }

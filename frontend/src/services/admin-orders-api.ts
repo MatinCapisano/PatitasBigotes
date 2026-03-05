@@ -26,6 +26,13 @@ export type AdminOrderItem = {
 export type AdminOrder = {
   id: number;
   user_id: number;
+  customer: {
+    id: number;
+    first_name: string;
+    last_name: string;
+    email: string;
+    phone: string | null;
+  } | null;
   status: "draft" | "submitted" | "paid" | "cancelled";
   currency: "ARS";
   total_amount: number;
@@ -41,9 +48,10 @@ export type AdminOrder = {
 export type AdminPayment = {
   id: number;
   order_id: number;
-  method: "bank_transfer" | "mercadopago";
+  method: "bank_transfer" | "mercadopago" | "cash";
   status: "pending" | "paid" | "cancelled" | "expired";
   amount: number;
+  change_amount?: number | null;
   currency: "ARS";
   external_ref: string | null;
   receipt_url: string | null;
@@ -107,5 +115,24 @@ export async function adminMarkOrderPaid(orderId: number, paymentRef: string, pa
     payment_ref: paymentRef,
     paid_amount: paidAmount
   });
+  return response.data.data;
+}
+
+export async function registerAdminOrderManualPayment(payload: {
+  order_id: number;
+  method: "cash" | "bank_transfer";
+  paid_amount: number;
+  change_amount?: number;
+  payment_ref?: string;
+}): Promise<{ order: AdminOrder; payment: AdminPayment }> {
+  const response = await http.post<{ data: { order: AdminOrder; payment: AdminPayment } }>(
+    `/admin/orders/${payload.order_id}/payments/manual`,
+    {
+      method: payload.method,
+      paid_amount: payload.paid_amount,
+      change_amount: payload.change_amount,
+      payment_ref: payload.payment_ref
+    }
+  );
   return response.data.data;
 }

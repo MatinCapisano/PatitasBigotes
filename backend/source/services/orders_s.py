@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session, joinedload
 
-from source.db.models import Order, OrderItem, ProductVariant
+from source.db.models import Order, OrderItem, ProductVariant, User
 from source.exceptions import OrderStatusTransitionError
 from source.services.discount_s import (
     calculate_line_pricing,
@@ -78,6 +78,7 @@ def _assert_transition_preconditions(
 
 def _order_query(db: Session):
     return db.query(Order).options(
+        joinedload(Order.user),
         joinedload(Order.items).joinedload(OrderItem.variant),
         joinedload(Order.items).joinedload(OrderItem.product),
     )
@@ -115,6 +116,7 @@ def _order_to_dict(order: Order) -> dict:
     return {
         "id": order.id,
         "user_id": order.user_id,
+        "customer": serialize_user_basic(order.user) if order.user is not None else None,
         "status": order.status,
         "currency": order.currency,
         "items": items,
@@ -555,28 +557,17 @@ def pay_order(
     return _order_to_dict(order)
 
 
-def create_manual_submitted_order(
+def _create_submitted_order_for_user(
     *,
-    email: str,
-    first_name: str,
-    last_name: str,
-    phone: str,
+    user_id: int,
     items: list[dict],
     db: Session,
 ) -> dict:
     if not items:
         raise ValueError("items are required")
 
-    user, user_created = get_or_create_user_by_contact(
-        email=email,
-        first_name=first_name,
-        last_name=last_name,
-        phone=phone,
-        db=db,
-    )
-
     order = Order(
-        user_id=int(user.id),
+        user_id=int(user_id),
         status="draft",
         currency="ARS",
         subtotal=0,
@@ -640,11 +631,145 @@ def create_manual_submitted_order(
     order.status = "submitted"
     db.flush()
     db.refresh(order)
+    return _order_to_dict(order)
+
+
+def create_manual_submitted_order(
+    *,
+    email: str,
+    first_name: str,
+    last_name: str,
+    phone: str,
+    items: list[dict],
+    db: Session,
+) -> dict:
+    if not items:
+        raise ValueError("items are required")
+
+    user, user_created = get_or_create_user_by_contact(
+        email=email,
+        first_name=first_name,
+        last_name=last_name,
+        phone=phone,
+        db=db,
+    )
+
+    order_payload = _create_submitted_order_for_user(
+        user_id=int(user.id),
+        items=items,
+        db=db,
+    )
 
     return {
         "customer": serialize_user_basic(user),
-        "order": _order_to_dict(order),
+        "order": order_payload,
         "meta": {"user_created": user_created},
+    }
+
+
+def create_admin_sale(
+    *,
+    admin_user_id: int,
+    customer: dict,
+    items: list[dict],
+    register_payment: bool,
+    payment: dict | None,
+    db: Session,
+) -> dict:
+    if not items:
+        raise ValueError("items are required")
+    mode = str(customer.get("mode") or "").strip().lower()
+    if mode not in {"existing", "new"}:
+        raise ValueError("customer.mode must be 'existing' or 'new'")
+
+    selected_user: User | None = None
+    user_created = False
+    if mode == "existing":
+        selected_user_id = customer.get("user_id")
+        if selected_user_id is None:
+            raise ValueError("customer.user_id is required when mode is existing")
+        selected_user = db.query(User).filter(User.id == int(selected_user_id)).first()
+        if selected_user is None:
+            raise LookupError("user not found")
+        for field in ("first_name", "last_name", "email", "phone", "dni"):
+            if customer.get(field) not in (None, ""):
+                raise ValueError(
+                    f"customer.{field} is not allowed when mode is existing"
+                )
+    else:
+        first_name = str(customer.get("first_name") or "").strip()
+        last_name = str(customer.get("last_name") or "").strip()
+        email = str(customer.get("email") or "").strip()
+        phone = str(customer.get("phone") or "").strip()
+        dni = customer.get("dni")
+        if not first_name or not last_name or not email or not phone:
+            raise ValueError(
+                "first_name, last_name, email and phone are required when mode is new"
+            )
+        selected_user, user_created = get_or_create_user_by_contact(
+            email=email,
+            first_name=first_name,
+            last_name=last_name,
+            phone=phone,
+            dni=str(dni).strip() if dni not in (None, "") else None,
+            db=db,
+        )
+
+    assert selected_user is not None
+    order_payload = _create_submitted_order_for_user(
+        user_id=int(selected_user.id),
+        items=items,
+        db=db,
+    )
+
+    payment_payload = None
+    if register_payment:
+        if payment is None:
+            raise ValueError("payment is required when register_payment is true")
+        method = str(payment.get("method") or "").strip().lower()
+        if method not in {"cash", "bank_transfer"}:
+            raise ValueError("payment.method must be cash or bank_transfer")
+        amount_paid = payment.get("amount_paid")
+        if amount_paid is None:
+            raise ValueError("payment.amount_paid is required")
+        change_amount = payment.get("change_amount")
+        payment_ref = str(payment.get("payment_ref") or "").strip()
+        if method == "bank_transfer" and not payment_ref:
+            raise ValueError("payment.payment_ref is required for bank_transfer")
+        if method == "cash" and not payment_ref:
+            payment_ref = f"cash-order-{int(order_payload['id'])}-{_utc_now().strftime('%Y%m%d%H%M%S')}"
+        payment_payload = confirm_manual_payment_for_order(
+            order_id=int(order_payload["id"]),
+            user_id=int(selected_user.id),
+            payment_ref=payment_ref,
+            paid_amount=int(amount_paid),
+            method=method,
+            change_amount=int(change_amount) if change_amount is not None else None,
+            db=db,
+        )
+        order_after_payment = get_order_for_admin(order_id=int(order_payload["id"]), db=db)
+        if order_after_payment is not None:
+            order_payload = order_after_payment
+    elif payment is not None:
+        raise ValueError("payment must be null when register_payment is false")
+
+    logger.info(
+        "event=admin_sale_created admin_user_id=%s order_id=%s customer_mode=%s register_payment=%s payment_method=%s",
+        int(admin_user_id),
+        int(order_payload["id"]),
+        mode,
+        bool(register_payment),
+        (payment_payload or {}).get("method"),
+    )
+
+    return {
+        "customer": serialize_user_basic(selected_user),
+        "order": order_payload,
+        "payment": payment_payload,
+        "meta": {
+            "customer_created": bool(user_created),
+            "payment_registered": bool(payment_payload is not None),
+        },
     }
 
 

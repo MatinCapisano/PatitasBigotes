@@ -270,6 +270,10 @@ class Payment(Base):
             sqlite_where=text("status = 'pending'"),
         ),
         CheckConstraint("amount >= 0", name="ck_payments_amount_non_negative"),
+        CheckConstraint(
+            "change_amount IS NULL OR change_amount >= 0",
+            name="ck_payments_change_amount_non_negative",
+        ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -281,9 +285,10 @@ class Payment(Base):
         index=True,
     )
 
-    method = Column(String, nullable=False)  # bank_transfer | mercadopago
+    method = Column(String, nullable=False)  # bank_transfer | mercadopago | cash
     status = Column(String, nullable=False, default="pending")
     amount = Column(Integer, nullable=False)
+    change_amount = Column(Integer, nullable=True)
     currency = Column(String, nullable=False, default="ARS")
 
     idempotency_key = Column(String, nullable=False, unique=True, index=True)

@@ -5,6 +5,8 @@ import {
   useAdminCatalog,
   useAdminDiscounts,
   useAdminOrdersPayments,
+  useAdminRegisterPayment,
+  useAdminSales,
   useAdminTurns
 } from "../features/admin";
 import {
@@ -12,6 +14,8 @@ import {
   CatalogSection,
   DiscountsSection,
   OrdersPaymentsSection,
+  RegisterPaymentSection,
+  SalesSection,
   TurnsSection
 } from "../features/admin/components";
 
@@ -30,11 +34,17 @@ export function AdminPage() {
     adminSection,
     variantOptions: catalog.variantOptions
   });
+  const sales = useAdminSales({
+    adminSection,
+    productsSorted: catalog.productsSorted,
+    variantsByProduct: catalog.variantsByProduct
+  });
+  const registerPayment = useAdminRegisterPayment({ adminSection });
 
   return (
     <section>
       <h1 className="page-title">Panel Admin</h1>
-      <p className="page-subtitle">Elegi que queres gestionar: catalogo, turnos, ordenes o pagos.</p>
+      <p className="page-subtitle">Elegi que queres gestionar: catalogo, descuentos, turnos, ordenes, pagos, registrar venta o registrar pago.</p>
       <AdminSectionTabs adminSection={adminSection} onSelect={setAdminSection} />
 
       {adminSection === "descuentos" && (
@@ -186,6 +196,7 @@ export function AdminPage() {
           ordersListLoading={ordersPayments.ordersListLoading}
           ordersList={ordersPayments.ordersList}
           loadAdminOrder={ordersPayments.loadAdminOrder}
+          closeSelectedOrder={ordersPayments.closeSelectedOrder}
           paymentsFilter={ordersPayments.paymentsFilter}
           setPaymentsFilter={ordersPayments.setPaymentsFilter}
           paymentsSortBy={ordersPayments.paymentsSortBy}
@@ -205,6 +216,125 @@ export function AdminPage() {
           manualPayAmount={ordersPayments.manualPayAmount}
           setManualPayAmount={ordersPayments.setManualPayAmount}
           onMarkOrderPaid={ordersPayments.onMarkOrderPaid}
+          formatArs={formatArs}
+        />
+      )}
+
+      {adminSection === "registrar_venta" && (
+        <SalesSection
+          firstName={sales.firstName}
+          setFirstName={sales.setFirstName}
+          lastName={sales.lastName}
+          setLastName={sales.setLastName}
+          email={sales.email}
+          setEmail={sales.setEmail}
+          phone={sales.phone}
+          setPhone={sales.setPhone}
+          dni={sales.dni}
+          setDni={sales.setDni}
+          selectedUser={sales.selectedUser}
+          onClearSelectedUser={sales.onClearSelectedUser}
+          showUserSearch={sales.showUserSearch}
+          openUserSearchModal={sales.openUserSearchModal}
+          closeUserSearchModal={sales.closeUserSearchModal}
+          searchFirstName={sales.searchFirstName}
+          setSearchFirstName={sales.setSearchFirstName}
+          searchLastName={sales.searchLastName}
+          setSearchLastName={sales.setSearchLastName}
+          searchEmail={sales.searchEmail}
+          setSearchEmail={sales.setSearchEmail}
+          searchDni={sales.searchDni}
+          setSearchDni={sales.setSearchDni}
+          searchPhone={sales.searchPhone}
+          setSearchPhone={sales.setSearchPhone}
+          searchLoading={sales.searchLoading}
+          searchError={sales.searchError}
+          searchResults={sales.searchResults}
+          pendingSelectedUser={sales.pendingSelectedUser}
+          onTogglePendingUser={sales.onTogglePendingUser}
+          onConfirmPendingUser={sales.onConfirmPendingUser}
+          showProductSearch={sales.showProductSearch}
+          openProductSearchModal={sales.openProductSearchModal}
+          closeProductSearchModal={sales.closeProductSearchModal}
+          productSearchQuery={sales.productSearchQuery}
+          setProductSearchQuery={sales.setProductSearchQuery}
+          productSearchResults={sales.productSearchResults}
+          pendingSelectedProductId={sales.pendingSelectedProductId}
+          onTogglePendingProduct={sales.onTogglePendingProduct}
+          onConfirmPendingProduct={sales.onConfirmPendingProduct}
+          selectedProduct={sales.selectedProduct}
+          onClearSelectedProduct={sales.onClearSelectedProduct}
+          selectedProductVariants={sales.selectedProductVariants}
+          newVariantId={sales.newVariantId}
+          setNewVariantId={sales.setNewVariantId}
+          newQuantity={sales.newQuantity}
+          setNewQuantity={sales.setNewQuantity}
+          items={sales.items}
+          total={sales.total}
+          onAddItem={sales.onAddItem}
+          removeItem={sales.removeItem}
+          registerPayment={sales.registerPayment}
+          setRegisterPayment={sales.setRegisterPayment}
+          paymentMethod={sales.paymentMethod}
+          setPaymentMethod={sales.setPaymentMethod}
+          amountPaid={sales.amountPaid}
+          setAmountPaid={sales.setAmountPaid}
+          changeAmount={sales.changeAmount}
+          setChangeAmount={sales.setChangeAmount}
+          paymentRef={sales.paymentRef}
+          setPaymentRef={sales.setPaymentRef}
+          saving={sales.saving}
+          error={sales.error}
+          success={sales.success}
+          onSubmit={sales.onSubmit}
+          formatArs={formatArs}
+        />
+      )}
+
+      {adminSection === "registrar_pago" && (
+        <RegisterPaymentSection
+          selectedUser={registerPayment.selectedUser}
+          onClearSelectedUser={registerPayment.onClearSelectedUser}
+          showUserSearch={registerPayment.showUserSearch}
+          openUserSearchModal={registerPayment.openUserSearchModal}
+          closeUserSearchModal={registerPayment.closeUserSearchModal}
+          searchFirstName={registerPayment.searchFirstName}
+          setSearchFirstName={registerPayment.setSearchFirstName}
+          searchLastName={registerPayment.searchLastName}
+          setSearchLastName={registerPayment.setSearchLastName}
+          searchEmail={registerPayment.searchEmail}
+          setSearchEmail={registerPayment.setSearchEmail}
+          searchDni={registerPayment.searchDni}
+          setSearchDni={registerPayment.setSearchDni}
+          searchPhone={registerPayment.searchPhone}
+          setSearchPhone={registerPayment.setSearchPhone}
+          searchLoading={registerPayment.searchLoading}
+          searchError={registerPayment.searchError}
+          searchResults={registerPayment.searchResults}
+          pendingSelectedUser={registerPayment.pendingSelectedUser}
+          onTogglePendingUser={registerPayment.onTogglePendingUser}
+          onConfirmPendingUser={registerPayment.onConfirmPendingUser}
+          orders={registerPayment.orders}
+          ordersLoading={registerPayment.ordersLoading}
+          ordersError={registerPayment.ordersError}
+          selectedOrderId={registerPayment.selectedOrderId}
+          setSelectedOrderId={registerPayment.setSelectedOrderId}
+          selectedOrder={registerPayment.selectedOrder}
+          method={registerPayment.method}
+          setMethod={registerPayment.setMethod}
+          paidAmount={registerPayment.paidAmount}
+          setPaidAmount={registerPayment.setPaidAmount}
+          changeAmount={registerPayment.changeAmount}
+          setChangeAmount={registerPayment.setChangeAmount}
+          paymentRef={registerPayment.paymentRef}
+          setPaymentRef={registerPayment.setPaymentRef}
+          saving={registerPayment.saving}
+          error={registerPayment.error}
+          success={registerPayment.success}
+          showConfirmModal={registerPayment.showConfirmModal}
+          setShowConfirmModal={registerPayment.setShowConfirmModal}
+          onOpenConfirm={registerPayment.onOpenConfirm}
+          onConfirmPayment={registerPayment.onConfirmPayment}
           formatArs={formatArs}
         />
       )}

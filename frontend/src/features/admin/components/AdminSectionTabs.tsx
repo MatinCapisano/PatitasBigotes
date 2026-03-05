@@ -22,6 +22,12 @@ export function AdminSectionTabs(props: {
       <button className={`btn btn-small ${adminSection === "pagos" ? "" : "btn-ghost"}`} type="button" onClick={() => onSelect("pagos")}>
         Pagos
       </button>
+      <button className={`btn btn-small ${adminSection === "registrar_venta" ? "" : "btn-ghost"}`} type="button" onClick={() => onSelect("registrar_venta")}>
+        Registrar venta
+      </button>
+      <button className={`btn btn-small ${adminSection === "registrar_pago" ? "" : "btn-ghost"}`} type="button" onClick={() => onSelect("registrar_pago")}>
+        Registrar pago
+      </button>
     </div>
   );
 }
