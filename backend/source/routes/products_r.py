@@ -28,6 +28,8 @@ from source.services.products_s import (
     get_category_by_id,
     get_product_by_id,
     get_variant_by_id,
+    list_admin_catalog,
+    list_admin_products_with_variants,
     list_categories as list_categories_s,
     list_variants_by_product_id,
     update_category as update_category_s,
@@ -45,20 +47,31 @@ def get_products(
     category: Optional[str] = Query(None),
     sort_by: Optional[Literal["price", "name"]] = Query(None),
     sort_order: Literal["asc", "desc"] = Query("asc"),
+    include_variants: bool = Query(False),
     _: dict = Depends(require_admin),
     db: Session = Depends(get_db_transactional),
 ):
-    products = filter_and_sort_products(
-        db=db,
-        min_price=min_price,
-        max_price=max_price,
-        category=category,
-        sort_by=sort_by,
-        sort_order=sort_order,
-    )
+    if include_variants:
+        payload = list_admin_products_with_variants(
+            db=db,
+            min_price=min_price,
+            max_price=max_price,
+            category=category,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+    else:
+        payload = filter_and_sort_products(
+            db=db,
+            min_price=min_price,
+            max_price=max_price,
+            category=category,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
 
     return {
-        "data": products,
+        "data": payload,
         "meta": {
             "filters": {
                 "min_price": min_price,
@@ -66,9 +79,18 @@ def get_products(
                 "category": category,
                 "sort_by": sort_by,
                 "sort_order": sort_order,
-            }
+            },
+            "include_variants": include_variants,
         },
     }
+
+
+@router.get("/admin/catalog")
+def get_admin_catalog(
+    _: dict = Depends(require_admin),
+    db: Session = Depends(get_db_transactional),
+):
+    return {"data": list_admin_catalog(db=db)}
 
 
 @router.get("/products/{product_id}")

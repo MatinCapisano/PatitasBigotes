@@ -209,6 +209,58 @@ def _category_to_dict(category: Category) -> dict:
     }
 
 
+def _variants_by_product_to_dict(products: list[Product]) -> dict[str, list[dict]]:
+    payload: dict[str, list[dict]] = {}
+    for product in products:
+        sorted_variants = sorted(product.variants, key=lambda row: int(row.id))
+        payload[str(int(product.id))] = [_variant_to_dict(variant) for variant in sorted_variants]
+    return payload
+
+
+def _query_admin_products(
+    session: Session,
+    *,
+    min_price: int | None = None,
+    max_price: int | None = None,
+    category: str | None = None,
+    sort_by: Literal["price", "name"] | None = None,
+    sort_order: Literal["asc", "desc"] = "asc",
+) -> list[Product]:
+    min_price_subquery = (
+        session.query(
+            ProductVariant.product_id.label("product_id"),
+            func.min(ProductVariant.price).label("min_var_price"),
+        )
+        .filter(ProductVariant.is_active.is_(True))
+        .group_by(ProductVariant.product_id)
+        .subquery()
+    )
+
+    query = (
+        session.query(Product)
+        .outerjoin(min_price_subquery, Product.id == min_price_subquery.c.product_id)
+        .options(
+            joinedload(Product.category),
+            joinedload(Product.variants),
+        )
+    )
+
+    if min_price is not None:
+        query = query.filter(min_price_subquery.c.min_var_price >= min_price)
+    if max_price is not None:
+        query = query.filter(min_price_subquery.c.min_var_price <= max_price)
+    if category is not None:
+        query = query.join(Product.category).filter_by(name=category)
+
+    if sort_by is not None:
+        column = min_price_subquery.c.min_var_price if sort_by == "price" else Product.name
+        query = query.order_by(desc(column) if sort_order == "desc" else asc(column))
+    else:
+        query = query.order_by(Product.id.asc())
+
+    return query.all()
+
+
 def filter_and_sort_products(
     db: Session | None = None,
     min_price: int | None = None,
@@ -218,39 +270,50 @@ def filter_and_sort_products(
     sort_order: Literal["asc", "desc"] = "asc",
 ) -> list[dict]:
     with _read_session_scope(db) as (session, _):
-        min_price_subquery = (
-            session.query(
-                ProductVariant.product_id.label("product_id"),
-                func.min(ProductVariant.price).label("min_var_price"),
-            )
-            .filter(ProductVariant.is_active.is_(True))
-            .group_by(ProductVariant.product_id)
-            .subquery()
+        products = _query_admin_products(
+            session,
+            min_price=min_price,
+            max_price=max_price,
+            category=category,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
+        return [_product_to_dict(product) for product in products]
 
-        query = (
-            session.query(Product, min_price_subquery.c.min_var_price)
-            .outerjoin(min_price_subquery, Product.id == min_price_subquery.c.product_id)
-            .options(
-                joinedload(Product.category),
-                joinedload(Product.variants),
-            )
+
+def list_admin_products_with_variants(
+    *,
+    db: Session | None = None,
+    min_price: int | None = None,
+    max_price: int | None = None,
+    category: str | None = None,
+    sort_by: Literal["price", "name"] | None = None,
+    sort_order: Literal["asc", "desc"] = "asc",
+) -> dict:
+    with _read_session_scope(db) as (session, _):
+        products = _query_admin_products(
+            session,
+            min_price=min_price,
+            max_price=max_price,
+            category=category,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
+        return {
+            "products": [_product_to_dict(product) for product in products],
+            "variants_by_product": _variants_by_product_to_dict(products),
+        }
 
-        if min_price is not None:
-            query = query.filter(min_price_subquery.c.min_var_price >= min_price)
-        if max_price is not None:
-            query = query.filter(min_price_subquery.c.min_var_price <= max_price)
-        if category is not None:
-            query = query.join(Product.category).filter_by(name=category)
 
-        if sort_by is not None:
-            column = min_price_subquery.c.min_var_price if sort_by == "price" else Product.name
-            query = query.order_by(desc(column) if sort_order == "desc" else asc(column))
-        else:
-            query = query.order_by(Product.id.asc())
-
-        return [_product_to_dict(product) for product, _ in query.all()]
+def list_admin_catalog(*, db: Session | None = None) -> dict:
+    with _read_session_scope(db) as (session, _):
+        products = _query_admin_products(session)
+        categories = session.query(Category).order_by(Category.id.asc()).all()
+        return {
+            "categories": [_category_to_dict(category) for category in categories],
+            "products": [_product_to_dict(product) for product in products],
+            "variants_by_product": _variants_by_product_to_dict(products),
+        }
 
 
 def get_product_by_id(product_id: int, db: Session | None = None) -> dict | None:

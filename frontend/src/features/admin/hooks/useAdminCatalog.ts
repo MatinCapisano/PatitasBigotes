@@ -1,19 +1,45 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   type AdminCategory,
+  type AdminCatalog,
   type AdminProduct,
   type AdminVariant,
   createAdminCategory,
   createAdminProduct,
   deleteAdminCategory,
   deleteAdminProduct,
-  listAdminCategories,
-  listAdminProducts,
-  listProductVariants,
+  getAdminCatalog,
   patchAdminProduct,
   patchAdminVariant
 } from "../../../services/admin-catalog-api";
 import type { VariantOption } from "../types";
+
+function normalizeVariantsByProduct(
+  payload: Record<string, AdminVariant[]>
+): Record<number, AdminVariant[]> {
+  const next: Record<number, AdminVariant[]> = {};
+  for (const [productId, variants] of Object.entries(payload)) {
+    const numericId = Number(productId);
+    if (!Number.isFinite(numericId)) continue;
+    next[numericId] = [...variants].sort((a, b) => a.id - b.id);
+  }
+  return next;
+}
+
+function deriveProductFromVariants(product: AdminProduct, variants: AdminVariant[]): AdminProduct {
+  const activeVariants = variants.filter((variant) => Boolean(variant.active));
+  const totalStock = activeVariants.reduce((sum, variant) => sum + Number(variant.stock ?? 0), 0);
+  const minVarPrice =
+    activeVariants.length > 0
+      ? Math.min(...activeVariants.map((variant) => Number(variant.price ?? 0)))
+      : null;
+  return {
+    ...product,
+    stock: totalStock,
+    active: activeVariants.length > 0 ? 1 : 0,
+    min_var_price: minVarPrice
+  };
+}
 
 export function useAdminCatalog() {
   const [products, setProducts] = useState<AdminProduct[]>([]);
@@ -55,6 +81,9 @@ export function useAdminCatalog() {
   const [stockQuantity, setStockQuantity] = useState("1");
   const [addingStock, setAddingStock] = useState(false);
   const [stockSuccessMessage, setStockSuccessMessage] = useState("");
+  const [showDeleteCategoryModal, setShowDeleteCategoryModal] = useState(false);
+  const [deleteCategoryId, setDeleteCategoryId] = useState("");
+  const [deletingCategory, setDeletingCategory] = useState(false);
 
   const hasCategories = categories.length > 0;
 
@@ -62,24 +91,14 @@ export function useAdminCatalog() {
     setLoading(true);
     setError("");
     try {
-      const [productList, categoryList] = await Promise.all([listAdminProducts(), listAdminCategories()]);
-      setProducts(productList);
-      setCategories(categoryList);
-      if (!newCategory && categoryList[0]?.name) {
-        setNewCategory(categoryList[0].name);
+      const catalog: AdminCatalog = await getAdminCatalog();
+      const normalizedVariants = normalizeVariantsByProduct(catalog.variants_by_product);
+      setProducts(catalog.products);
+      setCategories(catalog.categories);
+      setVariantsByProduct(normalizedVariants);
+      if (!newCategory && catalog.categories[0]?.name) {
+        setNewCategory(catalog.categories[0].name);
       }
-
-      const variantsEntries = await Promise.all(
-        productList.map(async (product) => {
-          const variants = await listProductVariants(product.id);
-          return [product.id, variants] as const;
-        })
-      );
-      const map: Record<number, AdminVariant[]> = {};
-      for (const [productId, variants] of variantsEntries) {
-        map[productId] = variants;
-      }
-      setVariantsByProduct(map);
     } catch {
       setError("No se pudo cargar el catalogo admin.");
     } finally {
@@ -141,31 +160,36 @@ export function useAdminCatalog() {
     }
   }
 
-  async function onDeleteCategory() {
-    if (catalogCategoryFilter === "all") {
-      setError("Selecciona una categoria para eliminar.");
+  function onOpenDeleteCategoryModal() {
+    const usedCategoryNames = new Set(products.map((product) => String(product.category || "")));
+    const deletable = categories.filter((category) => !usedCategoryNames.has(category.name));
+    if (!deletable.length) {
+      setError("No hay categorias eliminables (todas tienen productos).");
       return;
     }
-    const categoryName = catalogCategoryFilter;
-    const category = categories.find((item) => item.name === categoryName);
-    if (!category) {
-      setError("Categoria no encontrada.");
+    setDeleteCategoryId(String(deletable[0].id));
+    setShowDeleteCategoryModal(true);
+    setError("");
+  }
+
+  async function onConfirmDeleteCategory() {
+    const categoryId = Number.parseInt(deleteCategoryId, 10);
+    if (Number.isNaN(categoryId) || categoryId <= 0) {
+      setError("Selecciona una categoria valida.");
       return;
     }
-    const hasProducts = products.some((product) => String(product.category || "") === categoryName);
-    if (hasProducts) {
-      setError("No se puede eliminar una categoria con productos.");
-      return;
-    }
-    const confirmDelete = window.confirm(`Eliminar categoria "${categoryName}"?`);
-    if (!confirmDelete) return;
+    setDeletingCategory(true);
     setError("");
     try {
-      await deleteAdminCategory(category.id);
+      await deleteAdminCategory(categoryId);
+      setShowDeleteCategoryModal(false);
+      setDeleteCategoryId("");
       setCatalogCategoryFilter("all");
       await loadAll();
     } catch {
       setError("No se pudo eliminar la categoria.");
+    } finally {
+      setDeletingCategory(false);
     }
   }
 
@@ -211,14 +235,30 @@ export function useAdminCatalog() {
     setError("");
     setStockSuccessMessage("");
     try {
-      await Promise.all(
+      const updatedVariants = await Promise.all(
         variantsToUpdate.map((variant) =>
           patchAdminVariant(variant.id, {
             stock: Number(variant.stock ?? 0) + parsedQty
           })
         )
       );
-      await loadAll();
+      setVariantsByProduct((prev) => {
+        const current = prev[parsedProductId] ?? [];
+        const updates = new Map(updatedVariants.map((variant) => [variant.id, variant]));
+        return {
+          ...prev,
+          [parsedProductId]: current.map((variant) => updates.get(variant.id) ?? variant)
+        };
+      });
+      setProducts((prev) =>
+        prev.map((product) => {
+          if (product.id !== parsedProductId) return product;
+          const current = variantsByProduct[parsedProductId] ?? [];
+          const updates = new Map(updatedVariants.map((variant) => [variant.id, variant]));
+          const nextVariants = current.map((variant) => updates.get(variant.id) ?? variant);
+          return deriveProductFromVariants(product, nextVariants);
+        })
+      );
       setStockProductId("");
       setStockQuantity("0");
       setStockSuccessMessage(`Stock actualizado en ${variantsToUpdate.length} variante(s).`);
@@ -257,7 +297,8 @@ export function useAdminCatalog() {
     if (!editingProductId) return;
     setError("");
     try {
-      await patchAdminProduct(editingProductId, {
+      const currentProduct = products.find((product) => product.id === editingProductId) ?? null;
+      const updatedProduct = await patchAdminProduct(editingProductId, {
         name: editName.trim(),
         description: editDescription.trim() || null,
         img_url: editImgUrl.trim() || null,
@@ -266,7 +307,17 @@ export function useAdminCatalog() {
       });
       setEditingProductId(null);
       setOpenProductMenuId(null);
-      await loadAll();
+      setProducts((prev) => prev.map((product) => (product.id === editingProductId ? updatedProduct : product)));
+      if (currentProduct && currentProduct.active !== updatedProduct.active) {
+        setVariantsByProduct((prev) => {
+          const current = prev[updatedProduct.id] ?? [];
+          if (current.length === 0) return prev;
+          return {
+            ...prev,
+            [updatedProduct.id]: current.map((variant) => ({ ...variant, active: updatedProduct.active }))
+          };
+        });
+      }
     } catch {
       setError("No se pudo actualizar el producto.");
     }
@@ -331,9 +382,23 @@ export function useAdminCatalog() {
         payload.price = priceAsInt;
       }
 
-      await patchAdminVariant(variant.id, payload);
+      const updatedVariant = await patchAdminVariant(variant.id, payload);
       setEditingVariantId(null);
-      await loadAll();
+      setVariantsByProduct((prev) => {
+        const current = prev[updatedVariant.product_id] ?? [];
+        return {
+          ...prev,
+          [updatedVariant.product_id]: current.map((row) => (row.id === updatedVariant.id ? updatedVariant : row))
+        };
+      });
+      setProducts((prev) =>
+        prev.map((product) => {
+          if (product.id !== updatedVariant.product_id) return product;
+          const current = variantsByProduct[updatedVariant.product_id] ?? [];
+          const nextVariants = current.map((row) => (row.id === updatedVariant.id ? updatedVariant : row));
+          return deriveProductFromVariants(product, nextVariants);
+        })
+      );
     } catch {
       setError("No se pudo actualizar la variante.");
     }
@@ -360,6 +425,10 @@ export function useAdminCatalog() {
     () => categories.map((category) => category.name).sort((a, b) => a.localeCompare(b)),
     [categories]
   );
+  const deletableCategories = useMemo(() => {
+    const usedCategoryNames = new Set(products.map((product) => String(product.category || "")));
+    return categories.filter((category) => !usedCategoryNames.has(category.name));
+  }, [categories, products]);
 
   const visibleProducts = useMemo(() => {
     if (catalogCategoryFilter === "all") {
@@ -409,7 +478,14 @@ export function useAdminCatalog() {
     showCreateCategoryForm,
     setShowCreateCategoryForm,
     onCreateCategory,
-    onDeleteCategory,
+    showDeleteCategoryModal,
+    setShowDeleteCategoryModal,
+    deleteCategoryId,
+    setDeleteCategoryId,
+    deletingCategory,
+    deletableCategories,
+    onOpenDeleteCategoryModal,
+    onConfirmDeleteCategory,
     newCategoryName,
     setNewCategoryName,
     creatingCategory,

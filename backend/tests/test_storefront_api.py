@@ -16,7 +16,7 @@ os.environ.setdefault("DATABASE_URL", f"sqlite:///{DB_PATH.as_posix()}")
 from source.db.models import Base, Category, Product, ProductVariant
 from source.db.session import SessionLocal, engine
 from source.dependencies.auth_d import require_admin
-from source.routes.products_r import router as products_router
+from source.routes.products_r import get_admin_catalog, get_products, router as products_router
 from source.routes.storefront_r import storefront_product_detail, storefront_products
 
 
@@ -240,15 +240,83 @@ class StorefrontApiTests(unittest.TestCase):
 
         products_get = route_map.get(("GET", "/products"))
         categories_get = route_map.get(("GET", "/categories"))
+        admin_catalog_get = route_map.get(("GET", "/admin/catalog"))
 
         self.assertIsNotNone(products_get)
         self.assertIsNotNone(categories_get)
+        self.assertIsNotNone(admin_catalog_get)
 
         products_calls = {dependency.call for dependency in products_get.dependant.dependencies}
         categories_calls = {dependency.call for dependency in categories_get.dependant.dependencies}
+        admin_catalog_calls = {dependency.call for dependency in admin_catalog_get.dependant.dependencies}
 
         self.assertIn(require_admin, products_calls)
         self.assertIn(require_admin, categories_calls)
+        self.assertIn(require_admin, admin_catalog_calls)
+
+    def test_admin_catalog_returns_categories_products_and_variants_by_product(self) -> None:
+        db = SessionLocal()
+        try:
+            response = get_admin_catalog(_={"sub": "admin"}, db=db)
+        finally:
+            db.close()
+
+        payload = response["data"]
+        self.assertIn("categories", payload)
+        self.assertIn("products", payload)
+        self.assertIn("variants_by_product", payload)
+        self.assertEqual(len(payload["categories"]), 2)
+        self.assertEqual(len(payload["products"]), 3)
+        self.assertIn("1", payload["variants_by_product"])
+        self.assertEqual(len(payload["variants_by_product"]["1"]), 2)
+        self.assertEqual(payload["variants_by_product"]["1"][0]["sku"], "SKU-A1")
+        self.assertEqual(payload["variants_by_product"]["1"][1]["sku"], "SKU-A2")
+
+    def test_get_products_include_variants_returns_aggregated_shape(self) -> None:
+        db = SessionLocal()
+        try:
+            response = get_products(
+                min_price=None,
+                max_price=None,
+                category="Accesorios",
+                sort_by="name",
+                sort_order="asc",
+                include_variants=True,
+                _={"sub": "admin"},
+                db=db,
+            )
+        finally:
+            db.close()
+
+        payload = response["data"]
+        meta = response["meta"]
+        self.assertIn("products", payload)
+        self.assertIn("variants_by_product", payload)
+        self.assertEqual([product["name"] for product in payload["products"]], ["Collar A", "Correa B"])
+        self.assertEqual(sorted(payload["variants_by_product"].keys()), ["1", "2"])
+        self.assertTrue(meta["include_variants"])
+
+    def test_get_products_without_include_variants_keeps_legacy_shape(self) -> None:
+        db = SessionLocal()
+        try:
+            response = get_products(
+                min_price=None,
+                max_price=None,
+                category=None,
+                sort_by=None,
+                sort_order="asc",
+                include_variants=False,
+                _={"sub": "admin"},
+                db=db,
+            )
+        finally:
+            db.close()
+
+        payload = response["data"]
+        self.assertIsInstance(payload, list)
+        self.assertEqual(len(payload), 3)
+        self.assertIn("name", payload[0])
+        self.assertNotIn("variants_by_product", response["data"])
 
 
 if __name__ == "__main__":

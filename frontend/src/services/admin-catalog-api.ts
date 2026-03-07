@@ -29,13 +29,33 @@ export type AdminVariant = {
   active: number;
 };
 
-export async function listAdminProducts(): Promise<AdminProduct[]> {
-  const response = await http.get<{ data: AdminProduct[] }>("/products");
+export type AdminProductsWithVariants = {
+  products: AdminProduct[];
+  variants_by_product: Record<string, AdminVariant[]>;
+};
+
+export type AdminCatalog = {
+  categories: AdminCategory[];
+  products: AdminProduct[];
+  variants_by_product: Record<string, AdminVariant[]>;
+};
+
+export async function listAdminProducts(includeVariants?: false): Promise<AdminProduct[]>;
+export async function listAdminProducts(includeVariants: true): Promise<AdminProductsWithVariants>;
+export async function listAdminProducts(includeVariants = false): Promise<AdminProduct[] | AdminProductsWithVariants> {
+  const response = await http.get<{ data: AdminProduct[] | AdminProductsWithVariants }>("/products", {
+    params: includeVariants ? { include_variants: true } : undefined
+  });
   return response.data.data;
 }
 
 export async function listAdminCategories(): Promise<AdminCategory[]> {
   const response = await http.get<{ data: AdminCategory[] }>("/categories");
+  return response.data.data;
+}
+
+export async function getAdminCatalog(): Promise<AdminCatalog> {
+  const response = await http.get<{ data: AdminCatalog }>("/admin/catalog");
   return response.data.data;
 }
 
