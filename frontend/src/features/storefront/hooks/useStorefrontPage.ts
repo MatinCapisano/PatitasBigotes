@@ -7,24 +7,35 @@ import type { CategoryItem } from "../types";
 export function useStorefrontPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
   const [categories, setCategories] = useState<CategoryItem[]>([]);
   const [products, setProducts] = useState<StorefrontProduct[]>([]);
   const [sortBy, setSortBy] = useState<"price" | "name">("price");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(12);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  async function load(currentQuery?: string) {
+  const selectedCategoryId = Number(searchParams.get("category_id") || 0) || null;
+  const offset = Math.max(0, (page - 1) * pageSize);
+
+  async function load() {
     setLoading(true);
     setError("");
     try {
-      const rawCategoryId = searchParams.get("category_id");
-      const categoryId = rawCategoryId ? Number(rawCategoryId) : undefined;
       const payload = await fetchStorefrontProducts({
-        q: currentQuery?.trim() || undefined,
-        category_id: Number.isFinite(categoryId) ? categoryId : undefined
+        q: appliedQuery.trim() || undefined,
+        category_id: selectedCategoryId ?? undefined,
+        sort_by: sortBy,
+        sort_order: sortDir,
+        limit: pageSize,
+        offset
       });
       setProducts(payload.data);
+      const rawTotal = Number((payload.meta?.total as number | undefined) ?? 0);
+      setTotal(Number.isFinite(rawTotal) ? rawTotal : 0);
     } catch {
       setError("No se pudo cargar el catalogo.");
     } finally {
@@ -34,7 +45,7 @@ export function useStorefrontPage() {
 
   useEffect(() => {
     void load();
-  }, [searchParams]);
+  }, [selectedCategoryId, appliedQuery, sortBy, sortDir, page, pageSize]);
 
   useEffect(() => {
     async function run() {
@@ -50,10 +61,9 @@ export function useStorefrontPage() {
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
-    void load(query);
+    setAppliedQuery(query.trim());
+    setPage(1);
   }
-
-  const selectedCategoryId = Number(searchParams.get("category_id") || 0) || null;
 
   function onCategoryClick(categoryId: number | null) {
     const next = new URLSearchParams(searchParams);
@@ -62,27 +72,26 @@ export function useStorefrontPage() {
     } else {
       next.set("category_id", String(categoryId));
     }
+    setPage(1);
     setSearchParams(next);
   }
 
-  const sortedProducts = useMemo(() => {
-    const rows = [...products];
-    rows.sort((a, b) => {
-      if (sortBy === "name") {
-        const aName = (a.name || "").toLocaleLowerCase();
-        const bName = (b.name || "").toLocaleLowerCase();
-        if (aName < bName) return sortDir === "asc" ? -1 : 1;
-        if (aName > bName) return sortDir === "asc" ? 1 : -1;
-        return 0;
-      }
-      const aPrice = a.min_var_price ?? Number.MAX_SAFE_INTEGER;
-      const bPrice = b.min_var_price ?? Number.MAX_SAFE_INTEGER;
-      if (aPrice < bPrice) return sortDir === "asc" ? -1 : 1;
-      if (aPrice > bPrice) return sortDir === "asc" ? 1 : -1;
-      return 0;
-    });
-    return rows;
-  }, [products, sortBy, sortDir]);
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(total / pageSize)), [total, pageSize]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
+
+  const pageInfo = useMemo(() => {
+    if (total === 0) {
+      return { from: 0, to: 0 };
+    }
+    const from = offset + 1;
+    const to = Math.min(offset + products.length, total);
+    return { from, to };
+  }, [offset, products.length, total]);
 
   return {
     query,
@@ -92,11 +101,18 @@ export function useStorefrontPage() {
     setSortBy,
     sortDir,
     setSortDir,
+    page,
+    setPage,
+    pageSize,
+    setPageSize,
+    total,
+    totalPages,
+    pageInfo,
     loading,
     error,
     onSubmit,
     selectedCategoryId,
     onCategoryClick,
-    sortedProducts
+    products
   };
 }

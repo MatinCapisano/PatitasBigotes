@@ -6,6 +6,8 @@ export async function fetchStorefrontProducts(params?: {
   category_id?: number;
   min_price?: number;
   max_price?: number;
+  sort_by?: "price" | "name" | "created_at";
+  sort_order?: "asc" | "desc";
   limit?: number;
   offset?: number;
 }) {

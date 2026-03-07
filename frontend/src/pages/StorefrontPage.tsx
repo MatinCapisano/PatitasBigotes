@@ -44,28 +44,95 @@ export function StorefrontPage() {
       <div className="search-row">
         <label>
           Ordenar por
-          <select className="input" value={storefront.sortBy} onChange={(event) => storefront.setSortBy(event.target.value as "price" | "name")}>
+          <select
+            className="input"
+            value={storefront.sortBy}
+            onChange={(event) => {
+              storefront.setSortBy(event.target.value as "price" | "name");
+              storefront.setPage(1);
+            }}
+          >
             <option value="price">Precio</option>
             <option value="name">Alfabetico</option>
           </select>
         </label>
         <label>
           Direccion
-          <select className="input" value={storefront.sortDir} onChange={(event) => storefront.setSortDir(event.target.value as "asc" | "desc")}>
+          <select
+            className="input"
+            value={storefront.sortDir}
+            onChange={(event) => {
+              storefront.setSortDir(event.target.value as "asc" | "desc");
+              storefront.setPage(1);
+            }}
+          >
             <option value="asc">Ascendente</option>
             <option value="desc">Descendente</option>
+          </select>
+        </label>
+        <label>
+          Por pagina
+          <select
+            className="input"
+            value={storefront.pageSize}
+            onChange={(event) => {
+              storefront.setPageSize(Number(event.target.value));
+              storefront.setPage(1);
+            }}
+          >
+            <option value={8}>8</option>
+            <option value={12}>12</option>
+            <option value={16}>16</option>
+            <option value={24}>24</option>
           </select>
         </label>
       </div>
 
       {storefront.loading && <p>Cargando...</p>}
       {storefront.error && <p className="error">{storefront.error}</p>}
+      {!storefront.loading && !storefront.error && (
+        <div className="admin-inline-actions">
+          <p className="muted">
+            Mostrando {storefront.pageInfo.from}-{storefront.pageInfo.to} de {storefront.total}
+          </p>
+          <button className="btn btn-small btn-ghost" type="button" onClick={() => storefront.setPage(1)} disabled={storefront.page <= 1}>
+            {"<<"}
+          </button>
+          <button
+            className="btn btn-small btn-ghost"
+            type="button"
+            onClick={() => storefront.setPage((prev) => Math.max(1, prev - 1))}
+            disabled={storefront.page <= 1}
+          >
+            Anterior
+          </button>
+          <p className="muted">
+            Pagina {storefront.page} / {storefront.totalPages}
+          </p>
+          <button
+            className="btn btn-small btn-ghost"
+            type="button"
+            onClick={() => storefront.setPage((prev) => Math.min(storefront.totalPages, prev + 1))}
+            disabled={storefront.page >= storefront.totalPages}
+          >
+            Siguiente
+          </button>
+          <button
+            className="btn btn-small btn-ghost"
+            type="button"
+            onClick={() => storefront.setPage(storefront.totalPages)}
+            disabled={storefront.page >= storefront.totalPages}
+          >
+            {">>"}
+          </button>
+        </div>
+      )}
 
-      <div className="products-grid">
-        {storefront.sortedProducts.map((product) => (
-          <article className="card" key={product.id}>
+      <div className="products-grid products-grid-home">
+        {storefront.products.map((product) => (
+          <article className="card product-card-home" key={product.id}>
             {product.img_url ? (
-              <img className="product-image" src={product.img_url} alt={product.name} />
+              <img className="product-image product-image-home" src={product.img_url} alt={product.name} />
             ) : (
               <div className="image-placeholder">Sin imagen</div>
             )}

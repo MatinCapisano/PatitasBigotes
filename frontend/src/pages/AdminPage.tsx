@@ -119,7 +119,14 @@ export function AdminPage() {
           showCreateCategoryForm={catalog.showCreateCategoryForm}
           setShowCreateCategoryForm={catalog.setShowCreateCategoryForm}
           onCreateCategory={catalog.onCreateCategory}
-          onDeleteCategory={catalog.onDeleteCategory}
+          showDeleteCategoryModal={catalog.showDeleteCategoryModal}
+          setShowDeleteCategoryModal={catalog.setShowDeleteCategoryModal}
+          deleteCategoryId={catalog.deleteCategoryId}
+          setDeleteCategoryId={catalog.setDeleteCategoryId}
+          deletingCategory={catalog.deletingCategory}
+          deletableCategories={catalog.deletableCategories}
+          onOpenDeleteCategoryModal={catalog.onOpenDeleteCategoryModal}
+          onConfirmDeleteCategory={catalog.onConfirmDeleteCategory}
           newCategoryName={catalog.newCategoryName}
           setNewCategoryName={catalog.setNewCategoryName}
           creatingCategory={catalog.creatingCategory}

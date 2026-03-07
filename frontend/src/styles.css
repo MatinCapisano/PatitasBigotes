@@ -108,6 +108,93 @@ a {
   gap: 0.9rem;
 }
 
+.notifications-wrap {
+  position: relative;
+}
+
+.notifications-bell-btn {
+  position: relative;
+  width: 40px;
+  height: 36px;
+  border: 1px solid #8b6a52;
+  border-radius: 10px;
+  background: #ffffff;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.notifications-bell-icon {
+  width: 20px;
+  height: 20px;
+  fill: #ffffff;
+  stroke: #8b6a52;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.notifications-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #b75f5f;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  padding: 0 4px;
+}
+
+.notifications-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.45rem);
+  width: min(420px, 80vw);
+  max-height: 420px;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.15);
+  padding: 0.6rem;
+  z-index: 20;
+}
+
+.notifications-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+}
+
+.notifications-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.notifications-item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 0.5rem;
+  display: grid;
+  gap: 0.25rem;
+  cursor: pointer;
+}
+
+.notifications-item-read {
+  opacity: 0.7;
+  background: #fff;
+}
+
 .page {
   padding: 1.5rem 0 3rem;
 }
@@ -183,6 +270,33 @@ a {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 0.9rem;
+}
+
+.products-grid-home {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.product-card-home {
+  padding: 0.65rem;
+}
+
+.product-image-home {
+  aspect-ratio: 4 / 3;
+  max-height: 140px;
+  margin-bottom: 0.45rem;
+}
+
+@media (max-width: 1200px) {
+  .products-grid-home {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 920px) {
+  .products-grid-home {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .card {
@@ -740,6 +854,10 @@ a {
   }
 
   .admin-user-search-row {
+    grid-template-columns: 1fr;
+  }
+
+  .products-grid-home {
     grid-template-columns: 1fr;
   }
 

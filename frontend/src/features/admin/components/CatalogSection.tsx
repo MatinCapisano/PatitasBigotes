@@ -294,7 +294,14 @@ export function CatalogSection(props: {
   showCreateCategoryForm: boolean;
   setShowCreateCategoryForm: (value: boolean | ((prev: boolean) => boolean)) => void;
   onCreateCategory: (event: FormEvent) => Promise<void>;
-  onDeleteCategory: () => Promise<void>;
+  showDeleteCategoryModal: boolean;
+  setShowDeleteCategoryModal: (value: boolean | ((prev: boolean) => boolean)) => void;
+  deleteCategoryId: string;
+  setDeleteCategoryId: (value: string) => void;
+  deletingCategory: boolean;
+  deletableCategories: AdminCategory[];
+  onOpenDeleteCategoryModal: () => void;
+  onConfirmDeleteCategory: () => Promise<void>;
   newCategoryName: string;
   setNewCategoryName: (value: string) => void;
   creatingCategory: boolean;
@@ -375,7 +382,14 @@ export function CatalogSection(props: {
     showCreateCategoryForm,
     setShowCreateCategoryForm,
     onCreateCategory,
-    onDeleteCategory,
+    showDeleteCategoryModal,
+    setShowDeleteCategoryModal,
+    deleteCategoryId,
+    setDeleteCategoryId,
+    deletingCategory,
+    deletableCategories,
+    onOpenDeleteCategoryModal,
+    onConfirmDeleteCategory,
     newCategoryName,
     setNewCategoryName,
     creatingCategory,
@@ -476,9 +490,8 @@ export function CatalogSection(props: {
           <button
             className="btn btn-small btn-danger"
             type="button"
-            onClick={() => void onDeleteCategory()}
-            disabled={catalogCategoryFilter === "all"}
-            title={catalogCategoryFilter === "all" ? "Selecciona una categoria para eliminar" : "Eliminar categoria"}
+            onClick={onOpenDeleteCategoryModal}
+            title="Eliminar categoria"
           >
             Eliminar categoria
           </button>
@@ -712,6 +725,40 @@ export function CatalogSection(props: {
                 {addingStock ? "Actualizando..." : "Confirmar"}
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showDeleteCategoryModal ? (
+        <div className="admin-modal-overlay" role="dialog" aria-modal="true">
+          <div className="card admin-modal">
+            <div className="admin-modal-header">
+              <h3>Eliminar categoria</h3>
+              <button className="btn btn-small btn-ghost" type="button" onClick={() => setShowDeleteCategoryModal(false)}>
+                Cerrar
+              </button>
+            </div>
+            {deletableCategories.length === 0 ? (
+              <p className="muted">No hay categorias eliminables. Todas tienen productos asociados.</p>
+            ) : (
+              <>
+                <label>
+                  Categoria (solo sin productos)
+                  <select className="input" value={deleteCategoryId} onChange={(event) => setDeleteCategoryId(event.target.value)}>
+                    {deletableCategories.map((category) => (
+                      <option key={category.id} value={String(category.id)}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="admin-product-actions">
+                  <button className="btn btn-danger" type="button" onClick={() => void onConfirmDeleteCategory()} disabled={deletingCategory}>
+                    {deletingCategory ? "Eliminando..." : "Eliminar categoria"}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       ) : null}
