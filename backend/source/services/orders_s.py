@@ -21,6 +21,7 @@ from source.services.stock_reservations_s import (
     release_reservations_for_cancelled_order,
     reserve_stock_for_submitted_order,
 )
+from source.services.notifications_s import create_admin_notification
 from source.services.users_s import get_or_create_user_by_contact, serialize_user_basic
 
 ALLOWED_ORDER_STATUS = {"draft", "submitted", "paid", "cancelled"}
@@ -185,6 +186,35 @@ def _recalculate_order_total(order: Order, db: Session, *, force: bool = False) 
     order.total_amount = int(order_payload.get("total_amount", 0))
 
 
+def _normalize_requested_items(items: list[dict]) -> dict[int, int]:
+    aggregated_items: dict[int, int] = {}
+    for item in items:
+        variant_id = int(item["variant_id"])
+        quantity = int(item["quantity"])
+        if quantity <= 0:
+            raise ValueError("quantity must be greater than 0")
+        aggregated_items[variant_id] = aggregated_items.get(variant_id, 0) + quantity
+    return aggregated_items
+
+
+def _build_order_item_fields(*, variant: ProductVariant, quantity: int) -> dict:
+    pricing = calculate_line_pricing(
+        unit_price=int(variant.price),
+        quantity=quantity,
+        discount=None,
+    )
+    return {
+        "product_id": variant.product_id,
+        "variant_id": variant.id,
+        "quantity": quantity,
+        "unit_price": pricing["unit_price"],
+        "discount_id": pricing["discount_id"],
+        "discount_amount": pricing["discount_amount"],
+        "final_unit_price": pricing["final_unit_price"],
+        "line_total": pricing["line_total"],
+    }
+
+
 def get_or_create_draft_order(user_id: int, db: Session) -> tuple[dict, bool]:
     draft = (
         _order_query(db)
@@ -304,6 +334,7 @@ def list_orders_for_admin(
     return [_order_to_dict(order) for order in rows]
 
 
+# Legacy incremental draft-editing service kept for the deprecated POST /orders/draft/items route.
 def add_item_to_draft_order(
     user_id: int,
     variant_id: int,
@@ -376,6 +407,66 @@ def add_item_to_draft_order(
     return _order_to_dict(order)
 
 
+def replace_draft_order_items(user_id: int, items: list[dict], db: Session) -> dict:
+    order, _ = _get_or_create_draft_order_model(user_id=user_id, db=db)
+    if order.status != "draft":
+        raise ValueError("items can only be edited in draft status")
+
+    aggregated_items = _normalize_requested_items(items)
+    requested_variant_ids = list(aggregated_items.keys())
+
+    variants_by_id: dict[int, ProductVariant] = {}
+    if requested_variant_ids:
+        variants = (
+            db.query(ProductVariant)
+            .options(joinedload(ProductVariant.product))
+            .filter(
+                ProductVariant.id.in_(requested_variant_ids),
+                ProductVariant.is_active.is_(True),
+            )
+            .all()
+        )
+        variants_by_id = {int(variant.id): variant for variant in variants}
+        missing_variant_ids = sorted(
+            variant_id for variant_id in requested_variant_ids if variant_id not in variants_by_id
+        )
+        if missing_variant_ids:
+            if len(missing_variant_ids) == 1:
+                raise ValueError(f"variant {missing_variant_ids[0]} not found")
+            raise ValueError("some variants were not found")
+
+    (
+        db.query(OrderItem)
+        .filter(OrderItem.order_id == order.id)
+        .delete(synchronize_session=False)
+    )
+
+    for variant_id, quantity in aggregated_items.items():
+        variant = variants_by_id[variant_id]
+        item_fields = _build_order_item_fields(variant=variant, quantity=quantity)
+        db.add(
+            OrderItem(
+                order_id=order.id,
+                product_id=item_fields["product_id"],
+                variant_id=item_fields["variant_id"],
+                quantity=item_fields["quantity"],
+                unit_price=item_fields["unit_price"],
+                discount_id=item_fields["discount_id"],
+                discount_amount=item_fields["discount_amount"],
+                final_unit_price=item_fields["final_unit_price"],
+                line_total=item_fields["line_total"],
+            )
+        )
+
+    db.flush()
+    db.refresh(order)
+    _recalculate_order_total(order, db=db)
+    db.flush()
+    db.refresh(order)
+    return _order_to_dict(order)
+
+
+# Legacy incremental draft-editing service kept for the deprecated DELETE /orders/draft/items/{item_id} route.
 def remove_item_from_draft_order(user_id: int, item_id: int, db: Session) -> dict | None:
     draft = (
         _order_lock_query(db)
@@ -519,6 +610,25 @@ def change_order_status(
     order.status = new_status
     db.flush()
     db.refresh(order)
+    if current_status != str(order.status):
+        if str(order.status) == "submitted":
+            create_admin_notification(
+                event_type="order_submitted",
+                title="Nueva orden submitted",
+                message=f"La orden #{int(order.id)} fue enviada y espera pago.",
+                order_id=int(order.id),
+                dedupe_key=f"admin:order:{int(order.id)}:submitted",
+                db=db,
+            )
+        elif str(order.status) == "cancelled":
+            create_admin_notification(
+                event_type="order_cancelled",
+                title="Orden cancelada",
+                message=f"La orden #{int(order.id)} fue cancelada.",
+                order_id=int(order.id),
+                dedupe_key=f"admin:order:{int(order.id)}:cancelled",
+                db=db,
+            )
     logger.info(
         "event=order_status_transition_applied order_id=%s user_id=%s is_admin=%s from=%s to=%s",
         int(order.id),
@@ -578,13 +688,7 @@ def _create_submitted_order_for_user(
     db.add(order)
     db.flush()
 
-    aggregated_items: dict[int, int] = {}
-    for item in items:
-        variant_id = int(item["variant_id"])
-        quantity = int(item["quantity"])
-        if quantity <= 0:
-            raise ValueError("quantity must be greater than 0")
-        aggregated_items[variant_id] = aggregated_items.get(variant_id, 0) + quantity
+    aggregated_items = _normalize_requested_items(items)
 
     for variant_id, quantity in aggregated_items.items():
         variant = (
@@ -598,23 +702,19 @@ def _create_submitted_order_for_user(
         )
         if variant is None:
             raise ValueError(f"variant {variant_id} not found")
-        pricing = calculate_line_pricing(
-            unit_price=int(variant.price),
-            quantity=quantity,
-            discount=None,
-        )
+        item_fields = _build_order_item_fields(variant=variant, quantity=quantity)
 
         db.add(
             OrderItem(
                 order_id=order.id,
-                product_id=variant.product_id,
-                variant_id=variant.id,
-                quantity=quantity,
-                unit_price=pricing["unit_price"],
-                discount_id=pricing["discount_id"],
-                discount_amount=pricing["discount_amount"],
-                final_unit_price=pricing["final_unit_price"],
-                line_total=pricing["line_total"],
+                product_id=item_fields["product_id"],
+                variant_id=item_fields["variant_id"],
+                quantity=item_fields["quantity"],
+                unit_price=item_fields["unit_price"],
+                discount_id=item_fields["discount_id"],
+                discount_amount=item_fields["discount_amount"],
+                final_unit_price=item_fields["final_unit_price"],
+                line_total=item_fields["line_total"],
             )
         )
 
@@ -631,6 +731,14 @@ def _create_submitted_order_for_user(
     order.status = "submitted"
     db.flush()
     db.refresh(order)
+    create_admin_notification(
+        event_type="order_submitted",
+        title="Nueva orden submitted",
+        message=f"La orden #{int(order.id)} fue enviada y espera pago.",
+        order_id=int(order.id),
+        dedupe_key=f"admin:order:{int(order.id)}:submitted",
+        db=db,
+    )
     return _order_to_dict(order)
 
 

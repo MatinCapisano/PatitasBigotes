@@ -3,9 +3,16 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
+# Legacy schema kept for the deprecated incremental draft-editing endpoint.
 class AddOrderItemRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     variant_id: int
     quantity: int = Field(gt=0)
+
+
+class ReplaceDraftItemsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    items: list["ManualOrderItemRequest"] = Field(default_factory=list)
 
 
 class UpdateOrderStatusRequest(BaseModel):

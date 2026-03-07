@@ -14,6 +14,7 @@ from source.schemas import (
     CreateOrderPaymentRequest,
     PayOrderRequest,
     PublicGuestCheckoutRequest,
+    ReplaceDraftItemsRequest,
     SubmitBankTransferReceiptRequest,
     UpdateOrderStatusRequest,
 )
@@ -28,6 +29,7 @@ from source.services.orders_s import (
     get_order_for_user,
     list_orders_for_admin,
     list_orders_for_user,
+    replace_draft_order_items,
     remove_item_from_draft_order,
 )
 from source.services.anti_abuse_s import enforce_public_guest_checkout_limits
@@ -240,7 +242,26 @@ def get_or_create_draft(
     }
 
 
-@router.post("/orders/draft/items")
+@router.put("/orders/draft/items")
+def replace_draft_items(
+    payload: ReplaceDraftItemsRequest,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db_transactional),
+):
+    user_id = get_current_user_id(current_user)
+    try:
+        order = replace_draft_order_items(
+            user_id=user_id,
+            items=[item.model_dump() for item in payload.items],
+            db=db,
+        )
+    except Exception as exc:
+        raise_http_error_from_exception(exc, db=db)
+
+    return {"data": order}
+
+
+@router.post("/orders/draft/items", deprecated=True)
 def add_item_to_draft(
     payload: AddOrderItemRequest,
     current_user: dict = Depends(get_current_user),
@@ -260,7 +281,7 @@ def add_item_to_draft(
     return {"data": order}
 
 
-@router.delete("/orders/draft/items/{item_id}")
+@router.delete("/orders/draft/items/{item_id}", deprecated=True)
 def remove_item_from_draft(
     item_id: int,
     current_user: dict = Depends(get_current_user),

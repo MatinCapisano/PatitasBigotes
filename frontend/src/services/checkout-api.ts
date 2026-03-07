@@ -2,6 +2,14 @@ import type { CartItem } from "../lib/cart-storage";
 import { http } from "./http";
 
 export type CheckoutPaymentMethod = "bank_transfer" | "mercadopago" | "cash";
+const MERCADOPAGO_ALLOWED_CHECKOUT_HOSTS = new Set([
+  "www.mercadopago.com",
+  "mercadopago.com",
+  "www.mercadopago.com.ar",
+  "mercadopago.com.ar",
+  "sandbox.mercadopago.com",
+  "www.sandbox.mercadopago.com"
+]);
 
 type GuestCustomer = {
   email: string;
@@ -61,11 +69,38 @@ export function getMercadoPagoCheckoutUrl(payment: PaymentData | null): string |
     return null;
   }
   const checkout = payment.provider_payload_data?.checkout;
-  const checkoutUrl =
-    checkout?.checkout_url?.trim() ||
-    checkout?.init_point?.trim() ||
-    checkout?.sandbox_init_point?.trim();
+  const checkoutUrl = checkout?.checkout_url?.trim();
   return checkoutUrl || null;
+}
+
+export function validateMercadoPagoCheckoutUrl(url: string): string {
+  const normalizedUrl = url.trim();
+  if (!normalizedUrl) {
+    throw new Error("No se pudo obtener la URL de MercadoPago para continuar el pago.");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(normalizedUrl);
+  } catch {
+    throw new Error("La URL de pago de MercadoPago es invalida.");
+  }
+
+  if (parsed.protocol !== "https:") {
+    throw new Error("La URL de pago de MercadoPago debe usar HTTPS.");
+  }
+
+  const hostname = parsed.hostname.trim().toLowerCase().replace(/\.+$/, "");
+  if (!MERCADOPAGO_ALLOWED_CHECKOUT_HOSTS.has(hostname)) {
+    throw new Error("La URL de pago de MercadoPago no pertenece a un dominio permitido.");
+  }
+
+  return parsed.toString();
+}
+
+export function redirectToMercadoPago(url: string): void {
+  const safeUrl = validateMercadoPagoCheckoutUrl(url);
+  window.location.assign(safeUrl);
 }
 
 function buildIdempotencyKey(): string {
@@ -104,35 +139,19 @@ export async function submitGuestCheckoutFromCart(
   };
 }
 
-async function getDraftOrder(): Promise<OrderEnvelope["data"]> {
-  const response = await http.get<OrderEnvelope>("/orders/draft");
+async function replaceDraftItems(items: CartItem[]): Promise<OrderEnvelope["data"]> {
+  const response = await http.put<OrderEnvelope>("/orders/draft/items", {
+    items: toCheckoutItems(items)
+  });
   return response.data.data;
-}
-
-async function clearDraftItems(itemIds: number[]) {
-  for (const itemId of itemIds) {
-    await http.delete(`/orders/draft/items/${itemId}`);
-  }
 }
 
 export async function submitAuthenticatedCheckoutFromCart(
   items: CartItem[],
   paymentMethod: CheckoutPaymentMethod
 ): Promise<CheckoutSubmitResult> {
-  const draft = await getDraftOrder();
-  const itemIds = Array.isArray(draft.items) ? draft.items.map((row) => Number(row.id)).filter(Number.isFinite) : [];
-  if (itemIds.length > 0) {
-    await clearDraftItems(itemIds);
-  }
-
-  let orderId = draft.id;
-  for (const row of items) {
-    const response = await http.post<OrderEnvelope>("/orders/draft/items", {
-      variant_id: row.variant_id,
-      quantity: row.quantity
-    });
-    orderId = response.data.data.id;
-  }
+  const draft = await replaceDraftItems(items);
+  const orderId = draft.id;
 
   const submitted = await http.patch<OrderEnvelope>(`/orders/${orderId}/status`, {
     status: "submitted"

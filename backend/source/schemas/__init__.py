@@ -15,6 +15,7 @@ from source.schemas.orders_s import (
     CreateManualSubmittedOrderRequest,
     PayOrderRequest,
     PublicGuestCheckoutRequest,
+    ReplaceDraftItemsRequest,
     UpdateOrderStatusRequest,
 )
 from source.schemas.payments_s import (
@@ -52,6 +53,7 @@ __all__ = [
     "CreateAdminSaleRequest",
     "UpdateOrderStatusRequest",
     "CreateManualSubmittedOrderRequest",
+    "ReplaceDraftItemsRequest",
     "PublicGuestCheckoutRequest",
     "CreateUserRequest",
     "CreateGuestUserRequest",
