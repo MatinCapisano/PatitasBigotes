@@ -108,6 +108,11 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    notifications = relationship(
+        "Notification",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
 
 class AuthLoginThrottle(Base):
@@ -437,6 +442,49 @@ class PaymentRefund(Base):
     payment = relationship("Payment", back_populates="refunds")
     incident = relationship("PaymentIncident", back_populates="refunds")
     requested_by = relationship("User")
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    __table_args__ = (
+        Index("ix_notifications_user_read_created", "user_id", "is_read", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    role_target = Column(String, nullable=True, index=True)  # admin | null
+    event_type = Column(String, nullable=False, index=True)
+    title = Column(String, nullable=False)
+    message = Column(Text, nullable=False)
+    order_id = Column(
+        Integer,
+        ForeignKey("orders.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    payment_id = Column(
+        Integer,
+        ForeignKey("payments.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    incident_id = Column(
+        Integer,
+        ForeignKey("payment_incidents.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    dedupe_key = Column(String, nullable=True, unique=True, index=True)
+    is_read = Column(Boolean, nullable=False, default=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    read_at = Column(DateTime(timezone=True), nullable=True)
+
+    user = relationship("User", back_populates="notifications")
 
 
 class WebhookEvent(Base):

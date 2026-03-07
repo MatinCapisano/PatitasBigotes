@@ -1,12 +1,70 @@
+import { useCallback, useEffect, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { cartCount } from "../lib/cart-storage";
+import type { NotificationItem } from "../types";
+import { listNotifications, readAllNotifications, readNotification } from "../services/notifications-api";
 
 export function Layout() {
   const location = useLocation();
   const { isAuthenticated, logout } = useAuth();
   const currentCartCount = cartCount();
   const isAdminRoute = location.pathname.startsWith("/admin");
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  const loadNotifications = useCallback(async () => {
+    if (!isAuthenticated) {
+      setNotifications([]);
+      setUnreadCount(0);
+      return;
+    }
+    setNotificationsLoading(true);
+    try {
+      const response = await listNotifications({ limit: 20, offset: 0 });
+      setNotifications(response.data);
+      setUnreadCount(response.meta.unread_count);
+    } catch {
+      // fail silently in topbar
+    } finally {
+      setNotificationsLoading(false);
+    }
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    void loadNotifications();
+  }, [loadNotifications]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const timer = window.setInterval(() => {
+      void loadNotifications();
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [isAuthenticated, loadNotifications]);
+
+  async function onReadNotification(item: NotificationItem) {
+    if (item.is_read) return;
+    try {
+      await readNotification(item.id);
+      setNotifications((prev) => prev.map((row) => (row.id === item.id ? { ...row, is_read: true } : row)));
+      setUnreadCount((prev) => Math.max(0, prev - 1));
+    } catch {
+      // noop
+    }
+  }
+
+  async function onReadAllNotifications() {
+    try {
+      await readAllNotifications();
+      setNotifications((prev) => prev.map((row) => ({ ...row, is_read: true })));
+      setUnreadCount(0);
+    } catch {
+      // noop
+    }
+  }
 
   return (
     <div className="app-root">
@@ -21,6 +79,57 @@ export function Layout() {
             <Link to="/home">Tienda</Link>
             <Link to="/checkout">Carrito ({currentCartCount})</Link>
             {isAuthenticated && <Link to="/profile">Mi cuenta</Link>}
+            {isAuthenticated && (
+              <div className="notifications-wrap">
+                <button
+                  className="notifications-bell-btn"
+                  type="button"
+                  onClick={() => setNotificationsOpen((prev) => !prev)}
+                  aria-label="Abrir notificaciones"
+                >
+                  <svg
+                    className="notifications-bell-icon"
+                    viewBox="0 0 24 24"
+                    role="img"
+                    aria-hidden="true"
+                  >
+                    <path d="M12 3a5 5 0 0 0-5 5v2.8c0 .9-.3 1.8-.9 2.5L4.5 15a1 1 0 0 0 .7 1.7h13.6a1 1 0 0 0 .7-1.7l-1.6-1.7a3.8 3.8 0 0 1-.9-2.5V8a5 5 0 0 0-5-5Z" />
+                    <path d="M9.5 18.5a2.5 2.5 0 0 0 5 0" />
+                  </svg>
+                  {unreadCount > 0 ? <span className="notifications-badge">{unreadCount}</span> : null}
+                </button>
+                {notificationsOpen && (
+                  <div className="notifications-dropdown">
+                    <div className="notifications-header">
+                      <strong>Notificaciones</strong>
+                      <button className="btn btn-small btn-ghost" type="button" onClick={() => void onReadAllNotifications()}>
+                        Marcar todas leidas
+                      </button>
+                    </div>
+                    {notificationsLoading ? (
+                      <p className="muted">Cargando...</p>
+                    ) : notifications.length === 0 ? (
+                      <p className="muted">Sin notificaciones.</p>
+                    ) : (
+                      <div className="notifications-list">
+                        {notifications.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            className={`notifications-item ${item.is_read ? "notifications-item-read" : ""}`}
+                            onClick={() => void onReadNotification(item)}
+                          >
+                            <strong>{item.title}</strong>
+                            <span>{item.message}</span>
+                            <span className="muted">{new Date(item.created_at).toLocaleString()}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             {!isAuthenticated ? (
               <Link className="btn btn-small" to="/login">
                 Ingresar

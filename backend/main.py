@@ -8,6 +8,7 @@ from source.dependencies.csrf_d import CSRFMiddleware
 from source.routes.auth_r import router as auth_router
 from source.routes.discounts_r import router as discounts_router
 from source.routes.mercadopago_r import router as mercadopago_router
+from source.routes.notifications_r import router as notifications_router
 from source.routes.orders_r import router as orders_router
 from source.routes.payments_r import router as payments_router
 from source.routes.products_r import router as products_router
@@ -41,6 +42,7 @@ app.include_router(auth_router)
 app.include_router(turns_router)
 app.include_router(discounts_router)
 app.include_router(payments_router)
+app.include_router(notifications_router)
 app.include_router(stock_reservations_router)
 app.include_router(storefront_router)
 

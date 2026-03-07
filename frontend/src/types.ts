@@ -36,6 +36,21 @@ export type ApiEnvelope<T> = {
   meta?: Record<string, unknown>;
 };
 
+export type NotificationItem = {
+  id: number;
+  user_id: number | null;
+  role_target: "admin" | null;
+  event_type: string;
+  title: string;
+  message: string;
+  order_id: number | null;
+  payment_id: number | null;
+  incident_id: number | null;
+  is_read: boolean;
+  created_at: string;
+  read_at: string | null;
+};
+
 export type LoginResponse = {
   logged_in: boolean;
   access_expires_in_seconds: number;

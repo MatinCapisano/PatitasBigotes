@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from source.db.models import Order, Payment, PaymentIncident, PaymentRefund
 from source.services.mercadopago_client import create_refund
+from source.services.notifications_s import create_admin_notification
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,16 @@ def create_late_paid_incident_if_needed(
     )
     db.add(incident)
     db.flush()
+    create_admin_notification(
+        event_type="possible_refund",
+        title="Posible refund detectado",
+        message=f"Pago #{int(payment_id)} en orden #{int(order_id)} requiere revision para posible reembolso.",
+        order_id=int(order_id),
+        payment_id=int(payment_id),
+        incident_id=int(incident.id),
+        dedupe_key=f"admin:incident:{int(incident.id)}:possible_refund",
+        db=db,
+    )
     logger.warning(
         "event=late_payment_incident_created order_id=%s payment_id=%s incident_id=%s reason=%s",
         int(order_id),
