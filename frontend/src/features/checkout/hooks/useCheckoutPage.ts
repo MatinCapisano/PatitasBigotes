@@ -2,6 +2,7 @@ import { useState } from "react";
 import { clearCart, readCart } from "../../../lib/cart-storage";
 import {
   getMercadoPagoCheckoutUrl,
+  redirectToMercadoPago,
   submitAuthenticatedCheckoutFromCart,
   submitGuestCheckoutFromCart,
   type CheckoutPaymentMethod
@@ -36,14 +37,15 @@ export function useCheckoutPage(params: { authLoading: boolean; isAuthenticated:
             phone: guestPhone.trim()
           }, paymentMethod);
       const mercadoPagoCheckoutUrl = getMercadoPagoCheckoutUrl(result.payment);
-      clearCart();
       if (paymentMethod === "mercadopago") {
         if (!mercadoPagoCheckoutUrl) {
           throw new Error("No se pudo obtener la URL de MercadoPago para continuar el pago.");
         }
-        window.location.assign(mercadoPagoCheckoutUrl);
+        clearCart();
+        redirectToMercadoPago(mercadoPagoCheckoutUrl);
         return;
       }
+      clearCart();
       if (result.payment) {
         setSuccess(
           `Compra enviada. Orden #${result.order.id} (${result.order.status}). Pago #${result.payment.id} creado por ${result.payment.method}.`

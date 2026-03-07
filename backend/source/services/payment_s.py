@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, UTC
 import hashlib
 import json
+from urllib.parse import urlparse
 import uuid
 
 from sqlalchemy import func, or_
@@ -23,6 +24,7 @@ from source.services.refund_s import (
     create_late_paid_incident_if_needed,
 )
 from source.services.mercadopago_client import create_checkout_preference
+from source.services.notifications_s import create_admin_notification, create_user_notification
 from source.services.money_s import parse_amount_to_cents
 from source.services.stock_reservations_s import (
     consume_reservations_for_paid_order,
@@ -51,6 +53,14 @@ ALLOWED_PAYMENT_TRANSITIONS = {
     "paid": {"paid"},
     "cancelled": {"cancelled"},
     "expired": {"expired"},
+}
+MERCADOPAGO_ALLOWED_CHECKOUT_HOSTS = {
+    "www.mercadopago.com",
+    "mercadopago.com",
+    "www.mercadopago.com.ar",
+    "mercadopago.com.ar",
+    "sandbox.mercadopago.com",
+    "www.sandbox.mercadopago.com",
 }
 
 
@@ -664,6 +674,50 @@ def _build_bank_transfer_payload(
     }
 
 
+def _is_allowed_mercadopago_checkout_host(hostname: str | None) -> bool:
+    if hostname is None:
+        return False
+    normalized = hostname.strip().lower().rstrip(".")
+    if not normalized:
+        return False
+    return normalized in MERCADOPAGO_ALLOWED_CHECKOUT_HOSTS
+
+
+def normalize_and_validate_mercadopago_checkout_url(
+    provider_response: dict,
+    env: str,
+) -> str:
+    if not isinstance(provider_response, dict):
+        raise ValueError("invalid mercadopago provider response")
+
+    normalized_env = str(env or "").strip().lower()
+    primary_url = (
+        provider_response.get("sandbox_init_point")
+        if normalized_env == "sandbox"
+        else provider_response.get("init_point")
+    )
+    fallback_url = (
+        provider_response.get("init_point")
+        if normalized_env == "sandbox"
+        else provider_response.get("sandbox_init_point")
+    )
+
+    for raw_url in (primary_url, fallback_url):
+        if raw_url is None:
+            continue
+        checkout_url = str(raw_url).strip()
+        if not checkout_url:
+            continue
+        parsed = urlparse(checkout_url)
+        if parsed.scheme.lower() != "https":
+            continue
+        if not _is_allowed_mercadopago_checkout_host(parsed.hostname):
+            continue
+        return checkout_url
+
+    raise ValueError("invalid mercadopago checkout_url")
+
+
 def _build_mercadopago_payload(
     order_id: int,
     payment_id: int,
@@ -709,15 +763,7 @@ def _build_mercadopago_payload(
         idempotency_key=provider_idempotency_key,
     )
     env = get_mercadopago_env()
-    checkout_url = (
-        provider_response.get("sandbox_init_point")
-        if env == "sandbox"
-        else provider_response.get("init_point")
-    )
-    if not checkout_url:
-        checkout_url = provider_response.get("init_point") or provider_response.get(
-            "sandbox_init_point"
-        )
+    checkout_url = normalize_and_validate_mercadopago_checkout_url(provider_response, env)
     payload = {
         "checkout": {
             "provider": "mercadopago",
@@ -803,6 +849,7 @@ def apply_mercadopago_normalized_state(
         normalized_currency = normalized_currency.upper()
 
     now = datetime.now(UTC)
+    payment_was_paid = False
     payment = (
         db.query(Payment)
         .filter(Payment.id == payment_id, Payment.method == "mercadopago")
@@ -810,6 +857,7 @@ def apply_mercadopago_normalized_state(
     )
     if payment is None:
         raise LookupError("payment not found")
+    payment_was_paid = str(payment.status) == "paid"
     order = payment.order
     if order is None:
         raise LookupError("order not found")
@@ -857,6 +905,7 @@ def apply_mercadopago_normalized_state(
             payment.paid_at = now
 
     if internal_status == "paid":
+        order_was_submitted = str(order.status) == "submitted"
         duplicate_paid_payment = (
             db.query(Payment.id)
             .filter(
@@ -894,6 +943,37 @@ def apply_mercadopago_normalized_state(
         elif order.status == "paid":
             if order.paid_at is None:
                 order.paid_at = now
+
+        if not payment_was_paid:
+            create_admin_notification(
+                event_type="payment_paid",
+                title="Pago acreditado",
+                message=f"El pago #{int(payment.id)} se acredito para la orden #{int(order.id)}.",
+                order_id=int(order.id),
+                payment_id=int(payment.id),
+                dedupe_key=f"admin:payment:{int(payment.id)}:paid",
+                db=db,
+            )
+        if order_was_submitted and str(order.status) == "paid":
+            create_admin_notification(
+                event_type="order_paid",
+                title="Orden pagada",
+                message=f"La orden #{int(order.id)} quedo en estado paid.",
+                order_id=int(order.id),
+                payment_id=int(payment.id),
+                dedupe_key=f"admin:order:{int(order.id)}:paid",
+                db=db,
+            )
+            create_user_notification(
+                user_id=int(order.user_id),
+                event_type="order_ready_for_pickup",
+                title="Tu orden esta lista para retirar",
+                message=f"La orden #{int(order.id)} ya esta pagada y lista para retirar.",
+                order_id=int(order.id),
+                payment_id=int(payment.id),
+                dedupe_key=f"user:{int(order.user_id)}:order:{int(order.id)}:ready_to_pickup",
+                db=db,
+            )
     elif internal_status == "cancelled":
         # A provider-level cancellation should only close this payment attempt.
         # The order stays in its current state so the customer can retry payment.
@@ -1285,6 +1365,34 @@ def confirm_manual_payment_for_order(
         order.paid_at = now
 
     db.flush()
+    create_admin_notification(
+        event_type="payment_paid",
+        title="Pago confirmado",
+        message=f"El pago manual #{int(payment.id)} se confirmo para la orden #{int(order.id)}.",
+        order_id=int(order.id),
+        payment_id=int(payment.id),
+        dedupe_key=f"admin:payment:{int(payment.id)}:paid",
+        db=db,
+    )
+    create_admin_notification(
+        event_type="order_paid",
+        title="Orden pagada",
+        message=f"La orden #{int(order.id)} quedo en estado paid.",
+        order_id=int(order.id),
+        payment_id=int(payment.id),
+        dedupe_key=f"admin:order:{int(order.id)}:paid",
+        db=db,
+    )
+    create_user_notification(
+        user_id=int(order.user_id),
+        event_type="order_ready_for_pickup",
+        title="Tu orden esta lista para retirar",
+        message=f"La orden #{int(order.id)} ya esta pagada y lista para retirar.",
+        order_id=int(order.id),
+        payment_id=int(payment.id),
+        dedupe_key=f"user:{int(order.user_id)}:order:{int(order.id)}:ready_to_pickup",
+        db=db,
+    )
     db.refresh(payment)
     return _payment_to_dict(payment)
 

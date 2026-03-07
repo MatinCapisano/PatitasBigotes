@@ -2,6 +2,7 @@
 import unittest
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
+from unittest.mock import patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -23,6 +24,8 @@ from source.db.models import (
     User,
 )
 from source.services.payment_s import (
+    _build_mercadopago_payload,
+    normalize_and_validate_mercadopago_checkout_url,
     apply_mercadopago_normalized_state,
     create_payment_for_order,
     create_retry_payment_for_order,
@@ -140,6 +143,74 @@ class PaymentsMoneyConsistencyTests(unittest.TestCase):
         self.assertEqual(payment["amount"], 10000)
         self.assertIn("provider_payload_data", payment)
         self.assertIsInstance(payment["provider_payload_data"], dict)
+
+    def test_normalize_checkout_url_accepts_expected_https_host(self) -> None:
+        checkout_url = normalize_and_validate_mercadopago_checkout_url(
+            {
+                "id": "pref-1",
+                "init_point": "https://www.mercadopago.com/checkout/v1/redirect?pref_id=pref-1",
+                "sandbox_init_point": "https://sandbox.mercadopago.com/checkout/v1/redirect?pref_id=pref-1",
+            },
+            "prod",
+        )
+        self.assertEqual(
+            checkout_url,
+            "https://www.mercadopago.com/checkout/v1/redirect?pref_id=pref-1",
+        )
+
+    def test_normalize_checkout_url_rejects_non_https(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            normalize_and_validate_mercadopago_checkout_url(
+                {
+                    "id": "pref-2",
+                    "init_point": "http://www.mercadopago.com/checkout/v1/redirect?pref_id=pref-2",
+                },
+                "prod",
+            )
+        self.assertEqual(str(ctx.exception), "invalid mercadopago checkout_url")
+
+    def test_normalize_checkout_url_rejects_unexpected_host(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            normalize_and_validate_mercadopago_checkout_url(
+                {
+                    "id": "pref-3",
+                    "init_point": "https://evil.example.com/pay?pref_id=pref-3",
+                },
+                "prod",
+            )
+        self.assertEqual(str(ctx.exception), "invalid mercadopago checkout_url")
+
+    def test_normalize_checkout_url_uses_valid_fallback_when_primary_missing(self) -> None:
+        checkout_url = normalize_and_validate_mercadopago_checkout_url(
+            {
+                "id": "pref-4",
+                "sandbox_init_point": "https://sandbox.mercadopago.com/checkout/v1/redirect?pref_id=pref-4",
+            },
+            "prod",
+        )
+        self.assertEqual(
+            checkout_url,
+            "https://sandbox.mercadopago.com/checkout/v1/redirect?pref_id=pref-4",
+        )
+
+    def test_build_mercadopago_payload_rejects_invalid_checkout_url(self) -> None:
+        with patch(
+            "source.services.payment_s.create_checkout_preference",
+            return_value={
+                "id": "pref-invalid",
+                "init_point": "https://evil.example.com/pay?pref_id=pref-invalid",
+            },
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                _build_mercadopago_payload(
+                    order_id=10,
+                    payment_id=20,
+                    amount=10000,
+                    currency="ARS",
+                    expires_at=datetime.now(UTC) + timedelta(hours=1),
+                    payment_idempotency_key="idemp-test",
+                )
+        self.assertEqual(str(ctx.exception), "invalid mercadopago checkout_url")
 
     def test_create_payment_rejects_non_ars_currency(self) -> None:
         order_id, user_id = self._seed_submitted_order_with_reservation()
